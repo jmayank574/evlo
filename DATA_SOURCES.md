@@ -86,10 +86,19 @@ Legend for `Trust`:
 
 ## 3. APIs (live integrations — keys provisioned by operator, never committed)
 
-### NREL Alternative Fuels Data Center (AFDC) — charging stations
-- **Source / docs:** https://developer.nrel.gov/docs/transportation/alt-fuel-stations-v1/
-- **Key:** https://developer.nrel.gov/ (free)
+### NREL / NLR Alternative Fuels Data Center (AFDC) — charging stations
+- **Source / docs:** https://developer.nlr.gov/docs/transportation/alt-fuel-stations-v1/
+- **Key:** https://developer.nlr.gov/ (free)
 - **Used for:** real, current US charging-station locations (`fuel_type=ELEC`, DC fast / high-power).
+- **Domain transition (logged for provenance accuracy):** NREL rebranded to the
+  **National Laboratory of the Rockies (NLR)** and **retired the `nrel.gov`
+  domain on 2026-05-29**. The API moved from `developer.nrel.gov` to
+  **`developer.nlr.gov`**; **existing API keys are unchanged**, and the dataset
+  (AFDC) is the same government source. Verified 2026-06-14: old domain no longer
+  resolves, new `.gov` domain serves identical AFDC schema, and the transition is
+  documented at https://developer.nlr.gov/docs/nlr-domain-transition/.
+  The adapter's stored `source` label remains `"NREL"` for historical-row
+  continuity; this note records the rename so the trail doesn't look stale.
 
 ### Open Charge Map — charging stations (cross-check)
 - **Source / docs:** https://openchargemap.org/site/develop/api

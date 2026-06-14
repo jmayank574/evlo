@@ -136,6 +136,33 @@ class ChargingStation(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+class RouteCache(Base):
+    """Cached routing results so a feasibility check doesn't re-bill the
+    Directions API for a lane we've already routed. Keyed by provider + rounded
+    endpoints; expirable via ``expires_at``.
+    """
+
+    __tablename__ = "route_cache"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider", "origin_lat", "origin_lon", "dest_lat", "dest_lon",
+            name="uq_route_cache_key",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    provider: Mapped[str] = mapped_column(String(40))
+    origin_lat: Mapped[Decimal] = mapped_column(Numeric(9, 4))
+    origin_lon: Mapped[Decimal] = mapped_column(Numeric(9, 4))
+    dest_lat: Mapped[Decimal] = mapped_column(Numeric(9, 4))
+    dest_lon: Mapped[Decimal] = mapped_column(Numeric(9, 4))
+    distance_mi: Mapped[Decimal] = mapped_column(Numeric(8, 2))
+    duration_hours: Mapped[Decimal] = mapped_column(Numeric(6, 3))
+    geometry: Mapped[dict | None] = mapped_column(JSONBType, nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
 class Assessment(Base):
     __tablename__ = "assessments"
     __table_args__ = (
@@ -197,6 +224,7 @@ __all__ = [
     "Truck",
     "Load",
     "ChargingStation",
+    "RouteCache",
     "Assessment",
     "TRUST_LEVELS",
     "LOAD_SOURCES",

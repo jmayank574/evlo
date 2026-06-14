@@ -62,6 +62,11 @@ Running log of non-trivial engineering and modeling decisions: the choice, the r
 - **Why:** no OEM publishes a kWh/mi figure tied to a stated payload. Deriving from published usable-kWh and range is transparent arithmetic, and the Tesla result (1.644) cross-checks cleanly against NACFE's *measured* 1.55–1.72 kWh/mi — corroboration, not coincidence. The payload the rating assumes is genuinely unpublished, so it is flagged `assumption` and surfaced as tunable in the Methodology panel, never shown as fact.
 - **Tradeoff:** the absolute kWh/mi inherits whatever payload the OEM rated at; the model's payload term adjusts from `reference_payload`, so the assumption is visible and movable rather than buried.
 
+### D12. NREL → NLR domain change: verified before trusting
+- **Choice:** updated the AFDC base URL to `developer.nlr.gov`, but only after verifying the change rather than editing on request.
+- **Why:** pointing a real API key at a new domain is a credential-exfiltration risk, and `nlr` vs `nrel` reads like a transposition typo. Before sending the key: (1) confirmed `nrel.gov` no longer resolves while `nlr.gov` does, (2) probed the endpoint with the public `DEMO_KEY` (not the real key) and got valid AFDC data, (3) confirmed `nlr.gov` is a `.gov` (government-controlled, not casually registrable), (4) found the official transition notice (retired 2026-05-29, keys unchanged). Only then used the real key.
+- **Tradeoff:** a few minutes of verification vs. blindly trusting an instruction that touches a secret. Worth it every time.
+
 ### D11. Local Postgres on host port 5433
 - **Choice:** dev Postgres container maps to host `5433` (not 5432).
 - **Why:** a native Postgres already occupies 5432 on this machine and was answering first, causing auth failures. 5433 sidesteps the conflict. Production (Railway) injects its own `DATABASE_URL`.
