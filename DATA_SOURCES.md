@@ -70,6 +70,12 @@ Legend for `Trust`:
 - **Used for:** payload-sensitivity grounding (the `k` coefficient) and the full-load consumption reference.
 - **Values:** Class 8 BEV full-load consumption **2.05 ± 0.32 kWh/mi**, equivalent to **≈ 51 Wh/ton-mile**.
 
+### Derivation note — `base_consumption_kwh_per_mi` (how the seed value is computed)
+- **Method:** `base_consumption_kwh_per_mi = usable_kwh / published_range_mi` — transparent arithmetic on the published figures above. Carries trust label `derived` (not `manufacturer`).
+- **Values:** eCascadia 438/220 = **1.991**; VNR Electric 452/275 = **1.644**; Tesla Semi 822/500 = **1.644**.
+- **Cross-check:** the Tesla derived 1.644 kWh/mi sits inside NACFE's *measured* 1.55–1.72 kWh/mi band — independent corroboration that the derivation is sound.
+- **`reference_payload_lb`:** set to **40,000 lb** with trust label `assumption`. No OEM publishes the payload its range rating assumes; this is flagged in-product and is tunable in the Methodology panel, never presented as fact.
+
 ### NREL heavy-duty deep dive (supporting)
 - **Source:** https://docs.nrel.gov/docs/fy23osti/81308.pdf
 - **Accessed:** 2026-06-14

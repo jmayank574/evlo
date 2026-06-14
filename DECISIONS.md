@@ -41,3 +41,27 @@ Running log of non-trivial engineering and modeling decisions: the choice, the r
 - Backend: FastAPI + PostgreSQL, SQLAlchemy + Alembic, UUID PKs.
 - Frontend: React + Vite + TypeScript, Mapbox GL map.
 - Deploy: Railway (backend) + Vercel (frontend).
+
+### D7. Truck-spec provenance: per-field JSONB map (operator-confirmed)
+- **Choice:** `trucks.provenance` is a JSONB map of `field -> {trust, source_url, accessed_date, note}`.
+- **Why:** one truck can mix trust levels — Volvo's range is `manufacturer` but its usable kWh is `secondary`. A single per-row label would force the worst-case onto every field and misrepresent honest data. Per-field keeps the UI from showing a derived/assumed number with false confidence.
+- **Tradeoff:** not directly SQL-queryable by trust without JSON operators; acceptable since it's display metadata, not a filter axis.
+
+### D8. Assessment ModelParams snapshot: typed Numeric columns (operator-confirmed)
+- **Choice:** each of the 6 ModelParams is its own typed column on `assessments` (Numeric where appropriate), plus jsonb for `chargers_used`/`reasons`/snapshots.
+- **Why:** an audit record must be queryable ("show all assessments run with reserve < 10%") and must preserve Decimal precision on price. Typed columns do both.
+- **Tradeoff:** adding a future param requires a migration. Fine — params are a small, stable set, and a migration is the honest way to evolve an audit schema.
+
+### D9. No PostGIS
+- **Choice:** plain `Numeric(9,6)` lat/lon columns; no PostGIS.
+- **Why:** corridor charger search queries the NREL/OCM APIs by lat/lon + radius, not local geo-queries, so PostGIS would be an unused heavy dependency.
+- **Tradeoff:** if a real local geospatial need appears, it's a later migration. Cheap to add.
+
+### D10. base_consumption derived; reference_payload an explicit assumption
+- **Choice:** `base_consumption_kwh_per_mi = usable_kwh / published_range` (trust `derived`); `reference_payload_lb = 40,000` (trust `assumption`).
+- **Why:** no OEM publishes a kWh/mi figure tied to a stated payload. Deriving from published usable-kWh and range is transparent arithmetic, and the Tesla result (1.644) cross-checks cleanly against NACFE's *measured* 1.55–1.72 kWh/mi — corroboration, not coincidence. The payload the rating assumes is genuinely unpublished, so it is flagged `assumption` and surfaced as tunable in the Methodology panel, never shown as fact.
+- **Tradeoff:** the absolute kWh/mi inherits whatever payload the OEM rated at; the model's payload term adjusts from `reference_payload`, so the assumption is visible and movable rather than buried.
+
+### D11. Local Postgres on host port 5433
+- **Choice:** dev Postgres container maps to host `5433` (not 5432).
+- **Why:** a native Postgres already occupies 5432 on this machine and was answering first, causing auth failures. 5433 sidesteps the conflict. Production (Railway) injects its own `DATABASE_URL`.
