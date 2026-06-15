@@ -20,3 +20,8 @@ dist/
 Thumbs.db
 .idea/
 .vscode/
+
+# tsc composite build artifacts
+frontend/vite.config.js
+frontend/vite.config.d.ts
+*.tsbuildinfo
