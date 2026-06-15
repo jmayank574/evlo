@@ -62,6 +62,20 @@ Running log of non-trivial engineering and modeling decisions: the choice, the r
 - **Why:** no OEM publishes a kWh/mi figure tied to a stated payload. Deriving from published usable-kWh and range is transparent arithmetic, and the Tesla result (1.644) cross-checks cleanly against NACFE's *measured* 1.55–1.72 kWh/mi — corroboration, not coincidence. The payload the rating assumes is genuinely unpublished, so it is flagged `assumption` and surfaced as tunable in the Methodology panel, never shown as fact.
 - **Tradeoff:** the absolute kWh/mi inherits whatever payload the OEM rated at; the model's payload term adjusts from `reference_payload`, so the assumption is visible and movable rather than buried.
 
+### D13. Correctness gate — Tesla usable battery & base-consumption derivation (verified 2026-06-14)
+Two correctness checks before UI work; both traced to source.
+
+**(a) Tesla Semi usable energy — 822 kWh is correct, NOT a bug.**
+- The CARB filing (May 2026), as reported by both Electrek and InsideEVs, states **822 kWh is the *usable* capacity** of the **Long Range** trim; **548 kWh is a separate *Standard Range* trim**, not the usable figure of the 822 truck. Quotes: Electrek — "822 kWh **usable** battery pack"; InsideEVs — "822-kilowatt-hour **usable** battery capacity." No separate nameplate is published.
+- The engine reads `truck.usable_kwh` in `usable_energy_for_trip_kwh` and sizes the trip on it. With 822 that is correct. Swapping in 548 would model a *different vehicle* and make every Long-Range verdict pessimistically wrong — so it was **not** changed.
+- Guard test added (`test_engine_computes_on_usable_not_nameplate`): a 300-mi run feasible at usable 822 (available 698.7 kWh) flips to **infeasible** at usable 548 (available 465.8 kWh) — pinning that the engine consumes usable energy, never a larger nameplate.
+- If the Standard Range (548 kWh) is wanted in the product, it belongs as its **own seeded truck**, not as a "correction" to the Long Range.
+
+**(b) Base consumption — derived, additive, no double-counting.**
+- `base_consumption_kwh_per_mi` is **derived** as `usable_kwh / published_range` (Tesla: 822/500 = **1.644**), i.e. the consumption at the payload the range is rated at (~82,000 lb GCW). It does **not** trace to NACFE as its *source*; NACFE's measured **1.55–1.72 kWh/mi** is a **cross-check**, and 1.644 sits inside that band. Provenance updated to say so accurately (source = Tesla spec/derivation; NACFE = corroboration).
+- `consumption_kwh_per_mi = base + k·(payload − reference)/ton` is purely **additive**. At the reference payload the marginal term is exactly 0, so consumption = base; the loaded figure is never reused as the base. No double-counting. Pinned by `test_base_consumption_is_constant_payload_term_is_additive`.
+- Reference payload (40,000 lb) ≈ the cargo at 82,000 lb GCW (tractor+trailer ≈ 40k), so base@reference is consistent with where it was derived.
+
 ### D12. NREL → NLR domain change: verified before trusting
 - **Choice:** updated the AFDC base URL to `developer.nlr.gov`, but only after verifying the change rather than editing on request.
 - **Why:** pointing a real API key at a new domain is a credential-exfiltration risk, and `nlr` vs `nrel` reads like a transposition typo. Before sending the key: (1) confirmed `nrel.gov` no longer resolves while `nlr.gov` does, (2) probed the endpoint with the public `DEMO_KEY` (not the real key) and got valid AFDC data, (3) confirmed `nlr.gov` is a `.gov` (government-controlled, not casually registrable), (4) found the official transition notice (retired 2026-05-29, keys unchanged). Only then used the real key.

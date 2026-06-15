@@ -46,7 +46,7 @@ Legend for `Trust`:
 - **Trust:** regulatory (battery) + manufacturer (range/charge)
 - **Used for:** truck seed record.
 - **Values:**
-  - Battery: **822 kWh** (Long Range) / **548 kWh** (Standard Range)
+  - Battery: **822 kWh USABLE** (Long Range trim) / **548 kWh** (Standard Range — a *separate trim*, not the usable figure of the 822 truck). Both reports state the figure is **usable** capacity: Electrek — "the Long Range Semi carries an **822 kWh usable** battery pack while the Standard Range comes in at 548 kWh"; InsideEVs — "Long Range: **822-kilowatt-hour usable** battery capacity." No separate nameplate figure is disclosed. **The feasibility engine therefore correctly uses 822 as usable for the Long Range truck; 548 belongs to a different vehicle.**
   - Range: **500 mi** at 82,000 lb GCW (Long Range)
   - Charge power: up to **1.2 MW** (Megacharger); ~60% in 30 min
   - GCW: 82,000 lb

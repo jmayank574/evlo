@@ -108,11 +108,11 @@ TRUCKS: list[dict] = [
         reference_payload_lb=40_000,
         spec_source_url=TESLA_SPEC_URL,
         provenance={
-            "usable_kwh": _prov("regulatory", TESLA_CARB_URL, "822 kWh per May 2026 CARB filing"),
+            "usable_kwh": _prov("regulatory", TESLA_CARB_URL, "822 kWh USABLE per May 2026 CARB filing (Long Range trim; the filing's 548 kWh is the separate Standard Range trim, not this truck's nameplate)"),
             "published_range_mi": _prov("manufacturer", TESLA_SPEC_URL, "500 mi at 82,000 lb GCW"),
             "gvwr_lb": _prov("regulatory", TESLA_CARB_URL),
             "max_charge_kw": _prov("manufacturer", TESLA_SPEC_URL, "up to 1.2 MW Megacharger"),
-            "base_consumption_kwh_per_mi": _prov("derived", NACFE_URL, "usable_kwh / published_range; cross-checks NACFE measured 1.55-1.72 kWh/mi"),
+            "base_consumption_kwh_per_mi": _prov("derived", TESLA_SPEC_URL, "derived as usable_kwh / published_range (822/500 = 1.644); corroborated by NACFE measured 1.55-1.72 kWh/mi"),
             "reference_payload_lb": _prov("assumption", TESLA_SPEC_URL, REFERENCE_PAYLOAD_NOTE),
         },
     ),

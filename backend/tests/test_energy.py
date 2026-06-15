@@ -265,6 +265,41 @@ def test_verdict_infeasible_requires_multiple_stops():
     assert "Multi-stop" in a.reasons[0]
 
 
+def test_engine_computes_on_usable_not_nameplate():
+    """Guard: the engine must size the trip against USABLE energy. If a smaller
+    usable value is supplied, an otherwise-feasible run must flip to infeasible.
+
+    (Per the CARB filing, the Tesla Semi Long Range's 822 kWh IS the usable
+    figure, so using it is correct. This test pins the *mechanism*: feed 822
+    vs a hypothetical 548 usable and the verdict must change — proving the
+    engine consumes usable energy, never a larger nameplate.)
+    """
+    big = TruckSpec("usable-822", 822.0, 1.6, 40_000, 1000.0, 82_000)
+    small = TruckSpec("usable-548", 548.0, 1.6, 40_000, 1000.0, 82_000)
+    common = dict(
+        payload_lb=40_000.0, distance_mi=300.0, drive_hours=5.0, depart_at=DEPART,
+        deliver_by=datetime(2026, 6, 15, 0, 0), soc_start_pct=100.0, params=PARAMS,
+        charger_max_kw=None, charger_reachable=False,
+    )
+    # 300 mi @ 1.6 = 480 kWh. Usable@822,100%,15% = 698.7 (feasible, no charge).
+    a_big = assess(truck=big, **common)
+    assert a_big.verdict == Verdict.FEASIBLE
+    # Usable@548 = 465.8 < 480 -> needs charging, none reachable -> infeasible.
+    a_small = assess(truck=small, **common)
+    assert a_small.verdict == Verdict.INFEASIBLE
+
+
+def test_base_consumption_is_constant_payload_term_is_additive():
+    """No double-counting: at the reference payload the marginal payload term is
+    exactly zero, so consumption equals the base; the coefficient only adds on
+    top for loads heavier than the reference."""
+    truck = TruckSpec("t", 800, 1.644, 40_000, 1000, 82_000)
+    at_ref = consumption_kwh_per_mi(truck, 40_000.0, PARAMS)
+    assert at_ref == pytest.approx(1.644)  # base, untouched by the payload term
+    heavier = consumption_kwh_per_mi(truck, 50_000.0, PARAMS)  # +5 tons
+    assert heavier == pytest.approx(1.644 + 5 * PARAMS.payload_coefficient_kwh_per_mi_per_ton)
+
+
 def test_assessment_is_frozen_dataclass():
     a = assess(
         truck=TRUCK,
