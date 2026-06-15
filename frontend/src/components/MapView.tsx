@@ -12,6 +12,7 @@ export function MapView({ token, assessment }: Props) {
   const mapRef = useRef<mapboxgl.Map | null>(null);
   const markersRef = useRef<mapboxgl.Marker[]>([]);
   const loadedRef = useRef(false);
+  const animRef = useRef<number | null>(null);
 
   // Initialize the map once.
   useEffect(() => {
@@ -61,15 +62,29 @@ export function MapView({ token, assessment }: Props) {
       const geom = assessment.route_geometry;
       const coords = (geom?.coordinates ?? []) as [number, number][];
       const src = map.getSource("route") as mapboxgl.GeoJSONSource | undefined;
-      if (src) {
-        src.setData({
-          type: "Feature",
-          properties: {},
-          geometry: { type: "LineString", coordinates: coords },
-        });
-      }
       if (map.getLayer("route-line")) {
         map.setPaintProperty("route-line", "line-color", VERDICT_COLOR[assessment.verdict] ?? "#12a36b");
+      }
+      // Animate the route "drawing in" by progressively revealing vertices.
+      if (animRef.current) cancelAnimationFrame(animRef.current);
+      if (src) {
+        if (coords.length < 2) {
+          src.setData({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords } });
+        } else {
+          const DURATION = 650;
+          const t0 = performance.now();
+          const step = (now: number) => {
+            const p = Math.min(1, (now - t0) / DURATION);
+            const n = Math.max(2, Math.floor(p * coords.length));
+            src.setData({
+              type: "Feature",
+              properties: {},
+              geometry: { type: "LineString", coordinates: coords.slice(0, n) },
+            });
+            if (p < 1) animRef.current = requestAnimationFrame(step);
+          };
+          animRef.current = requestAnimationFrame(step);
+        }
       }
 
       // Reset markers.
@@ -79,15 +94,23 @@ export function MapView({ token, assessment }: Props) {
       const bounds = new mapboxgl.LngLatBounds();
 
       if (coords.length) {
-        const origin = coords[0];
-        const dest = coords[coords.length - 1];
-        for (const [pt, cls] of [
-          [origin, "origin"],
-          [dest, "dest"],
-        ] as [[number, number], string][]) {
+        const ls = assessment.load_snapshot as Record<string, unknown>;
+        const ends: [[number, number], string, string][] = [
+          [coords[0], "origin", `A · ${String(ls.origin_label ?? "Origin")}`],
+          [coords[coords.length - 1], "dest", `B · ${String(ls.dest_label ?? "Destination")}`],
+        ];
+        for (const [pt, cls, label] of ends) {
           const el = document.createElement("div");
-          el.className = `map-endpoint ${cls}`;
-          markersRef.current.push(new mapboxgl.Marker(el).setLngLat(pt).addTo(map));
+          el.className = `map-end ${cls}`;
+          const dot = document.createElement("span");
+          dot.className = "d";
+          const tag = document.createElement("span");
+          tag.className = "t";
+          tag.textContent = label;
+          el.append(dot, tag);
+          markersRef.current.push(
+            new mapboxgl.Marker({ element: el, anchor: "left" }).setLngLat(pt).addTo(map),
+          );
           bounds.extend(pt);
         }
       }

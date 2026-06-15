@@ -96,10 +96,18 @@ class Load(Base):
     dest_lon: Mapped[Decimal] = mapped_column(Numeric(9, 6))
 
     weight_lb: Mapped[int] = mapped_column(Integer)
-    pickup_window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    pickup_window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    delivery_window_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    delivery_window_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Absolute windows: used by real (uploaded) loads. Nullable because synthetic
+    # sample loads store RELATIVE offsets instead (resolved at request time) so
+    # their dates never go stale. A load has either absolute windows or offsets.
+    pickup_window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    pickup_window_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_window_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    delivery_window_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Relative offsets in HOURS from "today 00:00 UTC", resolved per request.
+    pickup_start_offset_h: Mapped[Decimal | None] = mapped_column(Numeric(7, 2), nullable=True)
+    pickup_end_offset_h: Mapped[Decimal | None] = mapped_column(Numeric(7, 2), nullable=True)
+    delivery_start_offset_h: Mapped[Decimal | None] = mapped_column(Numeric(7, 2), nullable=True)
+    delivery_end_offset_h: Mapped[Decimal | None] = mapped_column(Numeric(7, 2), nullable=True)
 
     # The only synthetic data in the system. Indexed so the UI can filter/badge.
     data_source: Mapped[str] = mapped_column(
@@ -207,11 +215,15 @@ class Assessment(Base):
     usable_energy_for_trip_kwh: Mapped[Decimal] = mapped_column(Numeric(9, 3))
     charging_required: Mapped[bool] = mapped_column(Boolean)
     num_charge_stops: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    stranded_at_mi: Mapped[Decimal | None] = mapped_column(Numeric(8, 2), nullable=True)
     energy_to_add_kwh: Mapped[Decimal] = mapped_column(Numeric(9, 3))
     charge_time_hours: Mapped[Decimal] = mapped_column(Numeric(6, 3))
     charge_cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 2))
     total_hours: Mapped[Decimal] = mapped_column(Numeric(6, 3))
+    time_mode: Mapped[str] = mapped_column(String(16), default="arrive_by", server_default="arrive_by")
+    latest_departure: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     projected_arrival: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    now_reference: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     on_time: Mapped[bool] = mapped_column(Boolean)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

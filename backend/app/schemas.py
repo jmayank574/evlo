@@ -61,6 +61,8 @@ class AssessRequest(BaseModel):
     truck_id: uuid.UUID
     soc_start_pct: float = Field(ge=0, le=100)
     params: AssessParams | None = None
+    time_mode: str = "arrive_by"  # "arrive_by" | "depart_at"
+    depart_at: datetime | None = None  # required when time_mode == "depart_at"
 
 
 class FleetRequest(BaseModel):
@@ -69,6 +71,8 @@ class FleetRequest(BaseModel):
     load_id: uuid.UUID
     soc_start_pct: float = Field(ge=0, le=100)
     params: AssessParams | None = None
+    time_mode: str = "arrive_by"
+    depart_at: datetime | None = None
 
 
 class AssessmentOut(BaseModel):
@@ -82,6 +86,7 @@ class AssessmentOut(BaseModel):
     usable_energy_for_trip_kwh: float
     charging_required: bool
     num_charge_stops: int
+    stranded_at_mi: float | None
     energy_to_add_kwh: float
     charge_time_hours: float
     charge_cost_usd: float
@@ -92,7 +97,11 @@ class AssessmentOut(BaseModel):
     route_distance_mi: float
     route_drive_hours: float
     total_hours: float
+    time_mode: str
+    latest_departure: datetime
     projected_arrival: datetime
+    now_reference: datetime | None
+    departure_slack_min: float | None = None  # arrive-by deciding number (set by API)
     on_time: bool
     routing_provider: str
     # detail

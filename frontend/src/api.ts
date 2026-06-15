@@ -46,6 +46,8 @@ export const api = {
     load_id: string;
     soc_start_pct: number;
     params?: AssessParams;
+    time_mode?: string;
+    depart_at?: string;
   }): Promise<FleetResponse> => {
     const res = await fetch(`${BASE}/api/assess/fleet`, {
       method: "POST",

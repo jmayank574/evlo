@@ -105,5 +105,12 @@ def build_methodology(params: ModelParams | None = None) -> MethodologyOut:
         "power comes from Open Charge Map; we never invent a kW value. Corridor lookups are "
         "best-effort: a single provider timeout skips that point, but a total outage fails loudly.",
         "The only synthetic data in the system is the sample load roster (badged 'synthetic').",
+        "Time model: 'arrive-by' computes the latest safe departure = deadline - drive time - "
+        "total charge time - dwell buffer; 'depart-at' computes arrival from a chosen departure. "
+        "Both use the same trip duration, so charge time feeds the departure math directly.",
+        "LIMITATION: drive time is Mapbox FREE-FLOW only. It does NOT model traffic by time of "
+        "day, nor hours-of-service driver-break rules — both would push real departures earlier. "
+        "Treat the latest-departure time as a best case, not a guarantee. We flag this gap rather "
+        "than fabricate a traffic/HOS model.",
     ]
     return MethodologyOut(params=param_docs, sources=sources, notes=notes)

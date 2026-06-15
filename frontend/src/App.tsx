@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
-import type { Assessment, AssessParams, Load, Methodology } from "./types";
+import type { Assessment, AssessParams, Load, Methodology, TimeMode } from "./types";
 import { Controls } from "./components/Controls";
 import { FleetList } from "./components/FleetList";
 import { MapView } from "./components/MapView";
@@ -13,6 +13,8 @@ export default function App() {
 
   const [loadId, setLoadId] = useState("");
   const [soc, setSoc] = useState(80);
+  const [timeMode, setTimeMode] = useState<TimeMode>("arrive_by");
+  const [departAt, setDepartAt] = useState(""); // datetime-local (UTC wall-clock)
   const [overrides, setOverrides] = useState<AssessParams>({});
 
   const [items, setItems] = useState<Assessment[]>([]);
@@ -28,22 +30,31 @@ export default function App() {
         setToken(cfg.mapbox_public_token);
         setLoads(l);
         setMethodology(m);
-        if (l.length) setLoadId(l[0].id);
+        if (l.length) {
+          setLoadId(l[0].id);
+          setDepartAt(l[0].pickup_window_start.slice(0, 16));
+        }
       } catch (e) {
         setError(`Could not reach the backend. ${(e as Error).message}`);
       }
     })();
   }, []);
 
-  async function assessFleet(nextOverrides: AssessParams = overrides) {
+  type Opts = { mode?: TimeMode; depart?: string; overrides?: AssessParams };
+  async function assessFleet(opts: Opts = {}) {
     if (!loadId) return;
+    const mode = opts.mode ?? timeMode;
+    const depart = opts.depart ?? departAt;
+    const ov = opts.overrides ?? overrides;
     setLoading(true);
     setError(null);
     try {
       const res = await api.assessFleet({
         load_id: loadId,
         soc_start_pct: soc,
-        params: Object.keys(nextOverrides).length ? nextOverrides : undefined,
+        params: Object.keys(ov).length ? ov : undefined,
+        time_mode: mode,
+        depart_at: mode === "depart_at" ? depart : undefined,
       });
       setItems(res.items);
       setSelectedId(res.items[0]?.id ?? null);
@@ -55,18 +66,36 @@ export default function App() {
     }
   }
 
-  // Debounced re-assess when a knob moves (only once a result exists).
   const debounce = useRef<number | undefined>(undefined);
+  function reassessSoon(opts: Opts) {
+    if (!items.length) return;
+    window.clearTimeout(debounce.current);
+    debounce.current = window.setTimeout(() => assessFleet(opts), 350);
+  }
+
   function onKnob(name: keyof AssessParams, value: number) {
     const next = { ...overrides, [name]: value };
     setOverrides(next);
-    if (!items.length) return;
-    window.clearTimeout(debounce.current);
-    debounce.current = window.setTimeout(() => assessFleet(next), 350);
+    reassessSoon({ overrides: next });
   }
   function resetKnobs() {
     setOverrides({});
-    if (items.length) assessFleet({});
+    if (items.length) assessFleet({ overrides: {} });
+  }
+  function onTimeMode(m: TimeMode) {
+    setTimeMode(m);
+    if (items.length) assessFleet({ mode: m });
+  }
+  function onDepartAt(v: string) {
+    setDepartAt(v);
+    if (timeMode === "depart_at") reassessSoon({ depart: v });
+  }
+  function onLoadChange(id: string) {
+    setLoadId(id);
+    setItems([]);
+    setSelectedId(null);
+    const l = loads.find((x) => x.id === id);
+    if (l) setDepartAt(l.pickup_window_start.slice(0, 16));
   }
 
   const selected = items.find((a) => a.id === selectedId) ?? null;
@@ -87,16 +116,18 @@ export default function App() {
             loads={loads}
             loadId={loadId}
             soc={soc}
+            timeMode={timeMode}
+            departAt={departAt}
             loading={loading}
-            onLoad={(id) => { setLoadId(id); setItems([]); setSelectedId(null); }}
+            onLoad={onLoadChange}
             onSoc={setSoc}
+            onTimeMode={onTimeMode}
+            onDepartAt={onDepartAt}
             onAssess={() => assessFleet()}
           />
           {error && <div className="error">{error}</div>}
           {loading && !items.length && <div className="loading">Routing the lane and scanning corridor chargers…</div>}
-          {items.length > 0 && (
-            <FleetList items={items} selectedId={selectedId} onSelect={setSelectedId} />
-          )}
+          {items.length > 0 && <FleetList items={items} selectedId={selectedId} onSelect={setSelectedId} />}
         </aside>
 
         <div className="map-wrap">

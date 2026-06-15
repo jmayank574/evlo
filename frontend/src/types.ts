@@ -54,6 +54,8 @@ export interface ChargerUsed {
 
 export type Verdict = "feasible" | "feasible_with_charging" | "infeasible";
 
+export type TimeMode = "arrive_by" | "depart_at";
+
 export interface Assessment {
   id: string;
   verdict: Verdict;
@@ -63,6 +65,7 @@ export interface Assessment {
   usable_energy_for_trip_kwh: number;
   charging_required: boolean;
   num_charge_stops: number;
+  stranded_at_mi: number | null;
   energy_to_add_kwh: number;
   charge_time_hours: number;
   charge_cost_usd: number;
@@ -70,7 +73,11 @@ export interface Assessment {
   route_distance_mi: number;
   route_drive_hours: number;
   total_hours: number;
+  time_mode: TimeMode;
+  latest_departure: string;
   projected_arrival: string;
+  now_reference: string | null;
+  departure_slack_min: number | null;
   on_time: boolean;
   routing_provider: string;
   route_geometry: { type: string; coordinates: [number, number][] } | null;

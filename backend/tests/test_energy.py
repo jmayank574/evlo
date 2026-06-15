@@ -4,12 +4,13 @@ This is the part of Voltpath that must be provably correct, so every function
 and every verdict branch is pinned to hand-computed expected values.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
 
 from app.domain.energy import (
+    ARRIVE_BY,
     Assessment,
     ChargeOption,
     ModelParams,
@@ -175,7 +176,7 @@ def test_verdict_infeasible_time_only_within_range():
     assert a.verdict == Verdict.INFEASIBLE
     assert a.charging_required is False
     assert a.on_time is False
-    assert "without charging" in a.reasons[0]
+    assert "past the deadline" in a.reasons[-1]
 
 
 def test_verdict_feasible_with_charging_one_stop():
@@ -236,7 +237,7 @@ def test_verdict_infeasible_charging_busts_window():
     assert a.num_charge_stops == 1  # charge was planned
     assert a.charge_time_hours == pytest.approx(0.6)
     assert a.on_time is False
-    assert "past the delivery window" in a.reasons[-1]
+    assert "past the deadline" in a.reasons[-1]
 
 
 def test_verdict_feasible_with_multiple_stops():
@@ -292,6 +293,83 @@ def test_unknown_power_chargers_are_not_usable():
     )
     assert a.verdict == Verdict.INFEASIBLE  # the only charger is unusable
     assert a.num_charge_stops == 0
+
+
+def test_arrive_by_computes_latest_departure_and_is_feasible():
+    # 100 mi @ 1.65 = no charging; trip = 2h drive + 0.5h dwell = 2.5h.
+    # deadline 12:00 -> latest departure 09:30; pickup opens 06:00, now 05:00 -> feasible.
+    a = assess(
+        truck=TRUCK, payload_lb=44_000.0, distance_mi=100.0, drive_hours=2.0,
+        deliver_by=datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc),
+        soc_start_pct=100.0, params=PARAMS, time_mode=ARRIVE_BY,
+        pickup_window_start=datetime(2026, 6, 14, 6, 0, tzinfo=timezone.utc),
+        now=datetime(2026, 6, 14, 5, 0, tzinfo=timezone.utc),
+    )
+    assert a.verdict == Verdict.FEASIBLE
+    assert a.time_mode == ARRIVE_BY
+    assert a.latest_departure == datetime(2026, 6, 14, 9, 30, tzinfo=timezone.utc)
+    assert a.on_time is True
+    assert "slack" in a.reasons[-1]
+    # reasons must NOT bake absolute clock times (rendered by the frontend in local tz)
+    assert "AM" not in a.reasons[-1] and "PM" not in a.reasons[-1]
+
+
+def test_arrive_by_latest_departure_equals_deadline_minus_trip():
+    """Pin the one roll-by value: latest_departure = deadline - (drive+charge+dwell)."""
+    deadline = datetime(2026, 6, 16, 19, 0, tzinfo=timezone.utc)
+    a = assess(
+        truck=TRUCK, payload_lb=44_000.0, distance_mi=200.0, drive_hours=4.0,
+        deliver_by=deadline, soc_start_pct=30.0, params=PARAMS, time_mode=ARRIVE_BY,
+        corridor=[ChargeOption("c1", 50.0, 350.0)],  # forces one charge stop
+        pickup_window_start=datetime(2026, 6, 16, 1, 0, tzinfo=timezone.utc),
+        now=datetime(2026, 6, 16, 1, 0, tzinfo=timezone.utc),
+    )
+    assert a.num_charge_stops == 1
+    assert a.total_hours == pytest.approx(a.drive_hours + a.charge_time_hours + a.dwell_hours)
+    assert a.latest_departure == deadline - timedelta(hours=a.total_hours)
+
+
+def test_arrive_by_charge_time_pulls_latest_departure_earlier():
+    # Same lane but low SoC forces a charge stop; the added charge time must move
+    # the latest departure earlier than the no-charge case.
+    common = dict(
+        truck=TRUCK, payload_lb=44_000.0, distance_mi=200.0, drive_hours=4.0,
+        deliver_by=datetime(2026, 6, 14, 20, 0, tzinfo=timezone.utc), params=PARAMS,
+        time_mode=ARRIVE_BY, corridor=[ChargeOption("c1", 50.0, 350.0)],
+        pickup_window_start=datetime(2026, 6, 14, 1, 0, tzinfo=timezone.utc),
+        now=datetime(2026, 6, 14, 1, 0, tzinfo=timezone.utc),
+    )
+    charged = assess(soc_start_pct=30.0, **common)   # needs a stop (+0.6h)
+    full = assess(soc_start_pct=100.0, **common)     # no charging
+    assert charged.num_charge_stops == 1 and full.num_charge_stops == 0
+    # charged trip is longer -> its latest departure is earlier
+    assert charged.latest_departure < full.latest_departure
+
+
+def test_arrive_by_infeasible_when_latest_departure_in_past():
+    # Tight deadline: latest departure lands before 'now' -> time-infeasible.
+    a = assess(
+        truck=TRUCK, payload_lb=44_000.0, distance_mi=100.0, drive_hours=2.0,
+        deliver_by=datetime(2026, 6, 14, 12, 0, tzinfo=timezone.utc),  # latest dep 09:30
+        soc_start_pct=100.0, params=PARAMS, time_mode=ARRIVE_BY,
+        pickup_window_start=datetime(2026, 6, 14, 6, 0, tzinfo=timezone.utc),
+        now=datetime(2026, 6, 14, 10, 0, tzinfo=timezone.utc),  # already past 09:30
+    )
+    assert a.verdict == Verdict.INFEASIBLE
+    assert a.on_time is False
+    assert "min ago" in a.reasons[-1]
+
+
+def test_arrive_by_infeasible_when_latest_departure_before_pickup_opens():
+    a = assess(
+        truck=TRUCK, payload_lb=44_000.0, distance_mi=100.0, drive_hours=2.0,
+        deliver_by=datetime(2026, 6, 14, 7, 0, tzinfo=timezone.utc),  # latest dep 04:30
+        soc_start_pct=100.0, params=PARAMS, time_mode=ARRIVE_BY,
+        pickup_window_start=datetime(2026, 6, 14, 6, 0, tzinfo=timezone.utc),  # opens after 04:30
+        now=datetime(2026, 6, 14, 1, 0, tzinfo=timezone.utc),
+    )
+    assert a.verdict == Verdict.INFEASIBLE
+    assert "opens for pickup" in a.reasons[-1]
 
 
 def test_engine_computes_on_usable_not_nameplate():

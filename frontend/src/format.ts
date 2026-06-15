@@ -17,27 +17,59 @@ export function fmtDur(min: number): string {
   return `${r}m`;
 }
 
-export function fmtDateTime(iso: string): string {
-  return new Date(iso).toLocaleString(undefined, {
+/** A route's local timezone. Times are a fact about the destination, not the
+ * viewer — a CA load's deadline is Pacific wherever you're sitting. Derived from
+ * the load's state suffix (all sample loads are single-state CA or TX);
+ * per-route IANA resolution from coordinates is the documented follow-up. */
+export interface Tz {
+  zone: string;
+  abbr: string;
+}
+export function routeTz(label?: string): Tz {
+  if (label && /\bTX\b/.test(label)) return { zone: "America/Chicago", abbr: "CT" };
+  return { zone: "America/Los_Angeles", abbr: "PT" }; // default Pacific
+}
+
+/** "Jun 16, 1:00 PM PT" — always in the route tz, always labeled. */
+export function fmtDateTime(iso: string, tz: Tz): string {
+  const t = new Date(iso).toLocaleString("en-US", {
     month: "short",
     day: "numeric",
     hour: "numeric",
     minute: "2-digit",
+    timeZone: tz.zone,
   });
+  return `${t} ${tz.abbr}`;
 }
 
-/** The single number that decides each row, by verdict. */
+/** "1:00 PM PT" — clock only, in the route tz, labeled. */
+export function fmtClock(iso: string, tz: Tz): string {
+  const t = new Date(iso).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: tz.zone,
+  });
+  return `${t} ${tz.abbr}`;
+}
+
+/** The single number that decides each row — mode-aware. */
 export function deciding(a: Assessment): { value: string; label: string } {
-  if (a.verdict === "feasible") {
-    const m = a.arrival_margin_min ?? 0;
-    return { value: m >= 0 ? `${fmtDur(m)}` : `${fmtDur(m)}`, label: m >= 0 ? "slack" : "late" };
+  const arriveBy = a.time_mode === "arrive_by";
+  const tz = routeTz(String((a.load_snapshot as Record<string, unknown>).origin_label ?? ""));
+
+  if (a.verdict === "infeasible") {
+    const isRange = a.reasons.some((r) => /out of range|strand/i.test(r));
+    if (isRange) return { value: "Out of range", label: "no charger closes the gap" };
+    if (arriveBy) return { value: "Too late", label: "deadline can't be met" };
+    return { value: fmtDur(a.arrival_margin_min ?? 0), label: "past the window" };
   }
+
+  if (arriveBy) {
+    return { value: `Roll ${fmtClock(a.latest_departure, tz)}`, label: `${fmtDur(a.departure_slack_min ?? 0)} slack` };
+  }
+  // depart-at
   if (a.verdict === "feasible_with_charging") {
     return { value: `${a.num_charge_stops}`, label: a.num_charge_stops === 1 ? "charge stop" : "charge stops" };
   }
-  // infeasible: distinguish range gap from late arrival.
-  const isRange = a.reasons.some((r) => /out of range|strand/i.test(r));
-  if (isRange) return { value: "Out of range", label: "no charger closes the gap" };
-  const m = a.arrival_margin_min ?? 0;
-  return { value: fmtDur(m), label: "past the window" };
+  return { value: fmtDur(a.arrival_margin_min ?? 0), label: "early" };
 }

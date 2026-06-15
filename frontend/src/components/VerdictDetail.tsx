@@ -1,14 +1,27 @@
 import type { Assessment, Provenance } from "../types";
-import { fmtDateTime, fmtDur } from "../format";
+import { fmtDateTime, fmtDur, routeTz } from "../format";
 import { TrustBadge } from "./Badge";
 
 export function VerdictDetail({ a }: { a: Assessment }) {
   const t = a.truck_snapshot as Record<string, unknown>;
   const prov = (t.provenance ?? {}) as Provenance;
   const trust = (f: string) => prov[f]?.trust ?? "—";
+  const arriveBy = a.time_mode === "arrive_by";
+  const ls = a.load_snapshot as Record<string, unknown>;
+  const tz = routeTz(String(ls.origin_label ?? ""));
+  const deadline = ls.delivery_window_end ? fmtDateTime(String(ls.delivery_window_end), tz) : null;
+
+  // All absolute times render here, in the viewer's local timezone (one source).
+  const timeHeadline =
+    a.verdict === "infeasible" && arriveBy && a.departure_slack_min !== null && a.departure_slack_min < 0
+      ? `Can't make the ${deadline} delivery — would need to roll before it's possible.`
+      : arriveBy
+        ? `Roll by ${fmtDateTime(a.latest_departure, tz)}${deadline ? ` to make the ${deadline} delivery.` : "."}`
+        : `Arrives ${fmtDateTime(a.projected_arrival, tz)}${deadline ? ` (deadline ${deadline}).` : "."}`;
 
   return (
     <div className="detail">
+      <div className={`time-headline ${arriveBy ? "roll" : "arrive"}`}>{timeHeadline}</div>
       <ul className="reasons">
         {a.reasons.map((r, i) => (
           <li key={i}>{r}</li>
@@ -25,8 +38,10 @@ export function VerdictDetail({ a }: { a: Assessment }) {
           <div className="v">{fmtDur(a.route_drive_hours * 60)}</div>
         </div>
         <div className="metric">
-          <div className="k">Arrival</div>
-          <div className="v" style={{ fontSize: 13 }}>{fmtDateTime(a.projected_arrival)}</div>
+          <div className="k">{arriveBy ? "Roll by" : "Arrival"}</div>
+          <div className="v" style={{ fontSize: 13 }}>
+            {fmtDateTime(arriveBy ? a.latest_departure : a.projected_arrival, tz)}
+          </div>
         </div>
         <div className="metric">
           <div className="k">Energy need</div>

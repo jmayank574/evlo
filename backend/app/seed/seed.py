@@ -139,45 +139,40 @@ TRUCKS: list[dict] = [
 ]
 
 
-def _dt(y: int, mo: int, d: int, h: int) -> datetime:
-    return datetime(y, mo, d, h, 0, tzinfo=timezone.utc)
-
-
-# Real city coordinates; only the freight assignment is synthetic.
-LOADS: list[dict] = [
-    dict(reference="LD-1001", origin_label="Los Angeles, CA", origin_lat=Decimal("34.052200"), origin_lon=Decimal("-118.243700"),
-         dest_label="Oakland, CA", dest_lat=Decimal("37.804400"), dest_lon=Decimal("-122.271200"),
-         weight_lb=42_000, pickup_window_start=_dt(2026, 6, 15, 6), pickup_window_end=_dt(2026, 6, 15, 9),
-         delivery_window_start=_dt(2026, 6, 15, 16), delivery_window_end=_dt(2026, 6, 15, 20)),
-    dict(reference="LD-1002", origin_label="Dallas, TX", origin_lat=Decimal("32.776700"), origin_lon=Decimal("-96.797000"),
-         dest_label="Houston, TX", dest_lat=Decimal("29.760400"), dest_lon=Decimal("-95.369800"),
-         weight_lb=38_000, pickup_window_start=_dt(2026, 6, 15, 7), pickup_window_end=_dt(2026, 6, 15, 9),
-         delivery_window_start=_dt(2026, 6, 15, 12), delivery_window_end=_dt(2026, 6, 15, 15)),
-    dict(reference="LD-1003", origin_label="Los Angeles, CA", origin_lat=Decimal("34.052200"), origin_lon=Decimal("-118.243700"),
-         dest_label="Sacramento, CA", dest_lat=Decimal("38.581600"), dest_lon=Decimal("-121.494400"),
-         weight_lb=30_000, pickup_window_start=_dt(2026, 6, 16, 5), pickup_window_end=_dt(2026, 6, 16, 8),
-         delivery_window_start=_dt(2026, 6, 16, 15), delivery_window_end=_dt(2026, 6, 16, 19)),
-    dict(reference="LD-1004", origin_label="San Diego, CA", origin_lat=Decimal("32.715700"), origin_lon=Decimal("-117.161100"),
-         dest_label="Los Angeles, CA", dest_lat=Decimal("34.052200"), dest_lon=Decimal("-118.243700"),
-         weight_lb=24_000, pickup_window_start=_dt(2026, 6, 16, 8), pickup_window_end=_dt(2026, 6, 16, 10),
-         delivery_window_start=_dt(2026, 6, 16, 12), delivery_window_end=_dt(2026, 6, 16, 14)),
-    dict(reference="LD-1005", origin_label="Fort Worth, TX", origin_lat=Decimal("32.755500"), origin_lon=Decimal("-97.330800"),
-         dest_label="San Antonio, TX", dest_lat=Decimal("29.424100"), dest_lon=Decimal("-98.493600"),
-         weight_lb=44_000, pickup_window_start=_dt(2026, 6, 17, 6), pickup_window_end=_dt(2026, 6, 17, 9),
-         delivery_window_start=_dt(2026, 6, 17, 11), delivery_window_end=_dt(2026, 6, 17, 14)),
-    dict(reference="LD-1006", origin_label="Long Beach, CA", origin_lat=Decimal("33.754200"), origin_lon=Decimal("-118.216500"),
-         dest_label="Bakersfield, CA", dest_lat=Decimal("35.373300"), dest_lon=Decimal("-119.018700"),
-         weight_lb=36_000, pickup_window_start=_dt(2026, 6, 17, 7), pickup_window_end=_dt(2026, 6, 17, 9),
-         delivery_window_start=_dt(2026, 6, 17, 12), delivery_window_end=_dt(2026, 6, 17, 15)),
-    dict(reference="LD-1007", origin_label="Austin, TX", origin_lat=Decimal("30.267200"), origin_lon=Decimal("-97.743100"),
-         dest_label="Houston, TX", dest_lat=Decimal("29.760400"), dest_lon=Decimal("-95.369800"),
-         weight_lb=28_000, pickup_window_start=_dt(2026, 6, 18, 6), pickup_window_end=_dt(2026, 6, 18, 8),
-         delivery_window_start=_dt(2026, 6, 18, 10), delivery_window_end=_dt(2026, 6, 18, 13)),
-    dict(reference="LD-1008", origin_label="Fresno, CA", origin_lat=Decimal("36.737800"), origin_lon=Decimal("-119.787100"),
-         dest_label="Los Angeles, CA", dest_lat=Decimal("34.052200"), dest_lon=Decimal("-118.243700"),
-         weight_lb=40_000, pickup_window_start=_dt(2026, 6, 18, 5), pickup_window_end=_dt(2026, 6, 18, 8),
-         delivery_window_start=_dt(2026, 6, 18, 13), delivery_window_end=_dt(2026, 6, 18, 17)),
+# Synthetic loads carry RELATIVE date offsets, not absolute dates, so they never
+# go stale: deadlines resolve to "today + N days" at request time. Spec tuple:
+# (ref, origin, o_lat, o_lon, dest, d_lat, d_lon, weight_lb, day_offset,
+#  (pickup_h0, pickup_h1), (delivery_h0, delivery_h1))  -- hours are UTC wall-clock.
+_LOAD_SPECS = [
+    ("LD-1001", "Los Angeles, CA", 34.0522, -118.2437, "Oakland, CA", 37.8044, -122.2712, 42_000, 1, (6, 9), (16, 20)),
+    ("LD-1002", "Dallas, TX", 32.7767, -96.7970, "Houston, TX", 29.7604, -95.3698, 38_000, 1, (7, 9), (12, 15)),
+    ("LD-1003", "Los Angeles, CA", 34.0522, -118.2437, "Sacramento, CA", 38.5816, -121.4944, 30_000, 2, (5, 8), (15, 19)),
+    ("LD-1004", "San Diego, CA", 32.7157, -117.1611, "Los Angeles, CA", 34.0522, -118.2437, 24_000, 2, (8, 10), (12, 14)),
+    ("LD-1005", "Fort Worth, TX", 32.7555, -97.3308, "San Antonio, TX", 29.4241, -98.4936, 44_000, 3, (6, 9), (11, 14)),
+    ("LD-1006", "Long Beach, CA", 33.7542, -118.2165, "Bakersfield, CA", 35.3733, -119.0187, 36_000, 3, (7, 9), (12, 15)),
+    ("LD-1007", "Austin, TX", 30.2672, -97.7431, "Houston, TX", 29.7604, -95.3698, 28_000, 4, (6, 8), (10, 13)),
+    ("LD-1008", "Fresno, CA", 36.7378, -119.7871, "Los Angeles, CA", 34.0522, -118.2437, 40_000, 4, (5, 8), (13, 17)),
 ]
+
+
+def _build_loads() -> list[dict]:
+    out: list[dict] = []
+    for ref, ol, olat, olon, dl, dlat, dlon, w, day, (p0, p1), (d0, d1) in _LOAD_SPECS:
+        out.append(dict(
+            reference=ref,
+            origin_label=ol, origin_lat=Decimal(str(olat)), origin_lon=Decimal(str(olon)),
+            dest_label=dl, dest_lat=Decimal(str(dlat)), dest_lon=Decimal(str(dlon)),
+            weight_lb=w,
+            # Absolute windows are left None; offsets are the source of truth.
+            pickup_window_start=None, pickup_window_end=None,
+            delivery_window_start=None, delivery_window_end=None,
+            pickup_start_offset_h=Decimal(day * 24 + p0), pickup_end_offset_h=Decimal(day * 24 + p1),
+            delivery_start_offset_h=Decimal(day * 24 + d0), delivery_end_offset_h=Decimal(day * 24 + d1),
+        ))
+    return out
+
+
+LOADS: list[dict] = _build_loads()
 
 
 def seed_all(db: Session) -> tuple[int, int]:

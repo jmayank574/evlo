@@ -18,7 +18,7 @@ hours. Money is the only quantity carried as Decimal (see `charge_cost_usd`).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from enum import Enum
 
@@ -259,14 +259,46 @@ class Assessment:
     charging_required: bool
     num_charge_stops: int
     stops: tuple[ChargeStop, ...]
+    # Where the truck would run out (mile along route) if it cannot reach the
+    # destination even with charging; None when it reaches. Drives the range bar.
+    stranded_at_mi: float | None
     energy_to_add_kwh: float
     charge_time_hours: float
     charge_cost_usd: Decimal
     drive_hours: float
     dwell_hours: float
     total_hours: float
+    # Time facts. `latest_departure` = deadline - trip_duration (the latest a
+    # truck can roll and still make it). `projected_arrival` = depart_at +
+    # trip_duration (meaningful in depart-at mode; equals the deadline in
+    # arrive-by). Both derive from the SAME trip_duration, so charge time feeds
+    # the backwards math automatically.
+    time_mode: str
+    latest_departure: datetime
     projected_arrival: datetime
+    now_reference: datetime | None
     on_time: bool
+
+
+# Time-of-day modes for the assessment.
+DEPART_AT = "depart_at"
+ARRIVE_BY = "arrive_by"
+
+
+def _clock(dt: datetime) -> str:
+    """'Jun 15, 1:59 AM' — robust on Windows (no %-I)."""
+    h = dt.hour % 12 or 12
+    return f"{dt:%b} {dt.day}, {h}:{dt:%M} {dt:%p}"
+
+
+def _aware(dt: datetime) -> datetime:
+    """Treat naive datetimes (e.g. from SQLite) as UTC, so time math is safe
+    regardless of where the datetime came from."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _mins(delta) -> float:
+    return delta.total_seconds() / 60.0
 
 
 def assess(
@@ -275,15 +307,25 @@ def assess(
     payload_lb: float,
     distance_mi: float,
     drive_hours: float,
-    depart_at: datetime,
     deliver_by: datetime,
     soc_start_pct: float,
     params: ModelParams,
     corridor: list[ChargeOption] | None = None,
+    time_mode: str = DEPART_AT,
+    depart_at: datetime | None = None,
+    pickup_window_start: datetime | None = None,
+    now: datetime | None = None,
 ) -> Assessment:
-    """Produce the three-state verdict from resolved route facts plus the set of
-    usable corridor chargers. Stays pure so it can be exhaustively unit-tested;
-    always returns the supporting numbers, the ordered charge stops, and reasons.
+    """Produce the time-aware three-state verdict.
+
+    `time_mode`:
+      * DEPART_AT  — `depart_at` is given; arrival = depart_at + trip_duration;
+        time-feasible iff arrival <= deliver_by.
+      * ARRIVE_BY  — the deadline is given; latest_departure = deliver_by -
+        trip_duration; time-feasible iff latest_departure >= max(now, pickup_open).
+
+    Range and time are independent gates: a truck that reaches the destination
+    can still be time-infeasible (and vice-versa). Stays pure / unit-testable.
     """
     corridor = corridor or []
     consumption = consumption_kwh_per_mi(truck, payload_lb, params)
@@ -302,61 +344,92 @@ def assess(
     )
     stops = plan.stops
     num_stops = len(stops)
+    stranded_at_mi = None if plan.can_reach else plan.stranded_at_mi
     energy_to_add = sum(s.energy_added_kwh for s in stops)
     charge_hours = sum(s.charge_hours for s in stops)
     cost = charge_cost_usd(energy_to_add, params)
     total_hours = drive_hours + charge_hours + dwell_hours
-    arrival = depart_at + timedelta(hours=total_hours)
-    on_time = arrival <= deliver_by
+    trip = timedelta(hours=total_hours)
+
+    # --- Time facts (mode-aware), both off the same trip_duration ---
+    latest_departure = _aware(deliver_by) - trip
+    now_reference: datetime | None = None
+    time_ok = True
+    time_reason = ""
+
+    # NOTE: reasons use tz-independent DURATIONS, never absolute clock times.
+    # Absolute times (roll-by / arrival / deadline) are rendered once, by the
+    # frontend, in the viewer's local timezone — see DECISIONS D17.
+    if time_mode == ARRIVE_BY:
+        now_reference = _aware(now) if now else datetime.now(timezone.utc)
+        pw = _aware(pickup_window_start) if pickup_window_start else None
+        earliest_roll = max(now_reference, pw) if pw else now_reference
+        projected_arrival = deliver_by  # rolling at the latest -> arrive exactly on the deadline
+        time_ok = latest_departure >= earliest_roll
+        if time_ok:
+            slack = _mins(latest_departure - earliest_roll)
+            time_reason = (
+                f"On time: the latest safe departure leaves {slack:.0f} min of slack "
+                f"before the deadline."
+            )
+        elif pw is not None and pw > now_reference:
+            short = _mins(pw - latest_departure)
+            time_reason = (
+                f"Infeasible on time: would need to roll {short:.0f} min before the load "
+                f"opens for pickup."
+            )
+        else:
+            late = _mins(now_reference - latest_departure)
+            time_reason = (
+                f"Infeasible on time: the latest safe departure was {late:.0f} min ago."
+            )
+    else:  # DEPART_AT
+        if depart_at is None:
+            raise ValueError("depart_at is required in depart-at mode")
+        projected_arrival = depart_at + trip
+        time_ok = _aware(projected_arrival) <= _aware(deliver_by)
+        if time_ok:
+            margin = _mins(_aware(deliver_by) - _aware(projected_arrival))
+            time_reason = f"On time: arrives with {margin:.0f} min to spare before the deadline."
+        else:
+            over = _mins(_aware(projected_arrival) - _aware(deliver_by))
+            time_reason = f"Infeasible on time: arrives {over:.0f} min past the deadline."
+
     charging_required = num_stops > 0 or not plan.can_reach
     reasons: list[str] = []
 
+    # --- Range gate ---
     if not plan.can_reach:
-        verdict = Verdict.INFEASIBLE
         gap = (
             f" (would strand near mile {plan.stranded_at_mi:.0f})"
-            if plan.stranded_at_mi is not None
-            else ""
+            if plan.stranded_at_mi is not None else ""
         )
         reasons.append(
             f"Out of range: needs {energy_req:.0f} kWh but only {usable:.0f} kWh is "
             f"available above the {params.reserve_pct:.0f}% reserve, and no reachable "
             f"corridor charger closes the gap{gap}."
         )
-        if num_stops:
-            reasons.append(
-                f"Even after {num_stops} charge stop(s), a charger gap remains on the route."
-            )
-    elif num_stops == 0:
-        if on_time:
-            verdict = Verdict.FEASIBLE
-            reasons.append(
-                f"Within range: needs {energy_req:.0f} kWh, has {usable:.0f} kWh "
-                f"available above the {params.reserve_pct:.0f}% reserve — no charging needed."
-            )
-            reasons.append("Projected arrival is within the delivery window.")
-        else:
-            verdict = Verdict.INFEASIBLE
-            reasons.append(
-                "Within range, but drive time plus dwell exceeds the delivery "
-                "window even without charging."
-            )
+        verdict = Verdict.INFEASIBLE
+        on_time = False
     else:
-        stop_word = "stop" if num_stops == 1 else "stops"
-        if on_time:
-            verdict = Verdict.FEASIBLE_WITH_CHARGING
+        if num_stops == 0:
             reasons.append(
-                f"Needs {num_stops} charge {stop_word}: add {energy_to_add:.0f} kWh "
+                f"Within range: needs {energy_req:.0f} kWh, has {usable:.0f} kWh above the "
+                f"{params.reserve_pct:.0f}% reserve — no charging needed."
+            )
+        else:
+            stop_word = "stop" if num_stops == 1 else "stops"
+            reasons.append(
+                f"Reaches with {num_stops} charge {stop_word}: +{energy_to_add:.0f} kWh "
                 f"total (~{charge_hours * 60:.0f} min) along the route."
             )
-            reasons.append("Projected arrival including charging is within the window.")
+        # --- Time gate ---
+        reasons.append(time_reason)
+        on_time = time_ok
+        if time_ok:
+            verdict = Verdict.FEASIBLE if num_stops == 0 else Verdict.FEASIBLE_WITH_CHARGING
         else:
             verdict = Verdict.INFEASIBLE
-            reasons.append(
-                f"Reachable with {num_stops} charge {stop_word} (add {energy_to_add:.0f} kWh, "
-                f"~{charge_hours * 60:.0f} min), but the added time pushes arrival past "
-                f"the delivery window."
-            )
 
     return Assessment(
         verdict=verdict,
@@ -367,12 +440,16 @@ def assess(
         charging_required=charging_required,
         num_charge_stops=num_stops,
         stops=stops,
+        stranded_at_mi=stranded_at_mi,
         energy_to_add_kwh=energy_to_add,
         charge_time_hours=charge_hours,
         charge_cost_usd=cost,
         drive_hours=drive_hours,
         dwell_hours=dwell_hours,
         total_hours=total_hours,
-        projected_arrival=arrival,
+        time_mode=time_mode,
+        latest_departure=latest_departure,
+        projected_arrival=projected_arrival,
+        now_reference=now_reference,
         on_time=on_time,
     )
