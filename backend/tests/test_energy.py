@@ -11,6 +11,7 @@ import pytest
 
 from app.domain.energy import (
     Assessment,
+    ChargeOption,
     ModelParams,
     TruckSpec,
     Verdict,
@@ -20,7 +21,7 @@ from app.domain.energy import (
     consumption_kwh_per_mi,
     effective_charge_power_kw,
     energy_required_kwh,
-    single_stop_headroom_kwh,
+    plan_charging,
     usable_energy_for_trip_kwh,
 )
 
@@ -121,11 +122,6 @@ def test_charge_time_raises_on_zero_power():
         charge_time_hours(100.0, 0.0)
 
 
-def test_single_stop_headroom():
-    # span = 80 - 15 = 65 -> 800 * 0.65 = 520
-    assert single_stop_headroom_kwh(TRUCK, PARAMS) == pytest.approx(520.0)
-
-
 def test_charge_cost_accounts_for_losses_and_is_decimal():
     # add 100 kWh / 0.92 efficiency = 108.6957 grid kWh * $0.20 = $21.74
     cost = charge_cost_usd(100.0, PARAMS)
@@ -182,8 +178,8 @@ def test_verdict_infeasible_time_only_within_range():
     assert "without charging" in a.reasons[0]
 
 
-def test_verdict_feasible_with_charging_on_time():
-    # soc 30 -> usable 120; need 330 -> add 210; one stop at 350 kW -> 36 min.
+def test_verdict_feasible_with_charging_one_stop():
+    # soc 30 -> start 240 kWh; reachable charger at mile 50 -> add 210, 36 min.
     a = assess(
         truck=TRUCK,
         payload_lb=44_000.0,
@@ -193,12 +189,11 @@ def test_verdict_feasible_with_charging_on_time():
         deliver_by=datetime(2026, 6, 14, 14, 0),  # 6h window
         soc_start_pct=30.0,
         params=PARAMS,
-        charger_max_kw=350.0,
-        charger_reachable=True,
+        corridor=[ChargeOption("c1", 50.0, 350.0)],
     )
     assert a.verdict == Verdict.FEASIBLE_WITH_CHARGING
-    assert a.charging_required is True
-    assert a.energy_to_add_kwh == pytest.approx(210.0)
+    assert a.num_charge_stops == 1
+    assert a.energy_to_add_kwh == pytest.approx(210.0)  # charges just enough to finish
     assert a.charge_time_hours == pytest.approx(0.6)
     assert a.total_hours == pytest.approx(5.1)  # 4 + 0.6 + 0.5
     assert a.projected_arrival == datetime(2026, 6, 14, 13, 6)
@@ -216,17 +211,16 @@ def test_verdict_infeasible_out_of_range_no_charger():
         deliver_by=datetime(2026, 6, 14, 14, 0),
         soc_start_pct=30.0,
         params=PARAMS,
-        charger_max_kw=None,
-        charger_reachable=False,
+        corridor=[],  # no corridor chargers
     )
     assert a.verdict == Verdict.INFEASIBLE
     assert a.charging_required is True
-    assert a.charge_time_hours == 0.0
-    assert "no viable corridor charger" in a.reasons[0]
+    assert a.num_charge_stops == 0
+    assert "no reachable corridor charger" in a.reasons[0]
 
 
 def test_verdict_infeasible_charging_busts_window():
-    # Same as the feasible-with-charging case, but a tighter window.
+    # Same as the one-stop case, but a tighter window.
     a = assess(
         truck=TRUCK,
         payload_lb=44_000.0,
@@ -236,33 +230,68 @@ def test_verdict_infeasible_charging_busts_window():
         deliver_by=datetime(2026, 6, 14, 12, 30),  # 4.5h window, need 5.1h
         soc_start_pct=30.0,
         params=PARAMS,
-        charger_max_kw=350.0,
-        charger_reachable=True,
+        corridor=[ChargeOption("c1", 50.0, 350.0)],
     )
     assert a.verdict == Verdict.INFEASIBLE
-    assert a.charging_required is True
-    assert a.charge_time_hours == pytest.approx(0.6)  # charge was computed
+    assert a.num_charge_stops == 1  # charge was planned
+    assert a.charge_time_hours == pytest.approx(0.6)
     assert a.on_time is False
     assert "past the delivery window" in a.reasons[-1]
 
 
-def test_verdict_infeasible_requires_multiple_stops():
-    # soc 20 -> usable 40; 500 mi -> 825 kWh; add 785 > 520 headroom.
+def test_verdict_feasible_with_multiple_stops():
+    # Long run, low SoC: needs more than one stop. Chargers spaced along route.
+    a = assess(
+        truck=TRUCK,  # usable 800, ~1.65 kWh/mi at 44k lb
+        payload_lb=44_000.0,
+        distance_mi=900.0,
+        drive_hours=15.0,
+        depart_at=DEPART,
+        deliver_by=datetime(2026, 6, 16, 12, 0),  # generous window
+        soc_start_pct=40.0,
+        params=PARAMS,
+        corridor=[ChargeOption(f"c{m}", float(m), 350.0) for m in range(100, 900, 100)],
+    )
+    assert a.verdict == Verdict.FEASIBLE_WITH_CHARGING
+    assert a.num_charge_stops >= 2
+    assert len(a.stops) == a.num_charge_stops
+    # stops are ordered along the route
+    alongs = [s.along_mi for s in a.stops]
+    assert alongs == sorted(alongs)
+
+
+def test_verdict_infeasible_charger_gap_strands():
+    # One reachable charger early, then a long gap with nothing -> stranded.
     a = assess(
         truck=TRUCK,
         payload_lb=44_000.0,
-        distance_mi=500.0,
-        drive_hours=8.0,
+        distance_mi=900.0,
+        drive_hours=15.0,
         depart_at=DEPART,
-        deliver_by=datetime(2026, 6, 15, 8, 0),  # generous window
-        soc_start_pct=20.0,
+        deliver_by=datetime(2026, 6, 17, 0, 0),
+        soc_start_pct=40.0,
         params=PARAMS,
-        charger_max_kw=350.0,
-        charger_reachable=True,
+        corridor=[ChargeOption("early", 100.0, 350.0)],  # nothing after mile 100
     )
     assert a.verdict == Verdict.INFEASIBLE
-    assert a.energy_to_add_kwh == pytest.approx(785.0)
-    assert "Multi-stop" in a.reasons[0]
+    assert "strand" in a.reasons[0].lower() or "no reachable" in a.reasons[0]
+
+
+def test_unknown_power_chargers_are_not_usable():
+    # A corridor charger with no known power can't be used (we never invent kW).
+    a = assess(
+        truck=TRUCK,
+        payload_lb=44_000.0,
+        distance_mi=200.0,
+        drive_hours=4.0,
+        depart_at=DEPART,
+        deliver_by=datetime(2026, 6, 14, 20, 0),
+        soc_start_pct=30.0,
+        params=PARAMS,
+        corridor=[ChargeOption("no-power", 50.0, 0.0)],
+    )
+    assert a.verdict == Verdict.INFEASIBLE  # the only charger is unusable
+    assert a.num_charge_stops == 0
 
 
 def test_engine_computes_on_usable_not_nameplate():
@@ -279,7 +308,7 @@ def test_engine_computes_on_usable_not_nameplate():
     common = dict(
         payload_lb=40_000.0, distance_mi=300.0, drive_hours=5.0, depart_at=DEPART,
         deliver_by=datetime(2026, 6, 15, 0, 0), soc_start_pct=100.0, params=PARAMS,
-        charger_max_kw=None, charger_reachable=False,
+        corridor=[],
     )
     # 300 mi @ 1.6 = 480 kWh. Usable@822,100%,15% = 698.7 (feasible, no charge).
     a_big = assess(truck=big, **common)

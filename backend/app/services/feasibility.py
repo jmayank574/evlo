@@ -26,10 +26,17 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from app.adapters.base import ChargingProvider, Coord, RoutingProvider, Route, StationResult
+from app.adapters.base import (
+    ChargingProvider,
+    Coord,
+    ProviderError,
+    Route,
+    RoutingProvider,
+    StationResult,
+)
 from app.adapters.charging import haversine_mi
 from app.domain.energy import Assessment as DomainAssessment
-from app.domain.energy import ModelParams, TruckSpec, assess
+from app.domain.energy import ChargeOption, ModelParams, TruckSpec, assess
 from app.models import Assessment, Load, Truck
 
 # Corridor search tuning (stated simplifications, surfaced in the methodology).
@@ -82,29 +89,34 @@ def find_corridor_chargers(
     buffer_mi: float,
 ) -> list[CorridorCharger]:
     """Collect unique chargers near the corridor, each tagged with the smallest
-    along-route distance at which it was seen."""
+    along-route distance at which it was seen.
+
+    Best-effort per (point, provider): a single provider timeout skips that one
+    lookup (partial corridor coverage is already a stated simplification — we are
+    NOT inventing chargers). But if EVERY lookup fails (a real outage), we fail
+    loudly rather than return a misleadingly empty corridor.
+    """
     found: dict[tuple[str, str], CorridorCharger] = {}
+    attempts = 0
+    failures = 0
+    last_error: ProviderError | None = None
     for (lat, lon), along in points:
         for provider in providers:
-            for s in provider.stations_near(lat, lon, buffer_mi):
+            attempts += 1
+            try:
+                stations = provider.stations_near(lat, lon, buffer_mi)
+            except ProviderError as exc:
+                failures += 1
+                last_error = exc
+                continue
+            for s in stations:
                 key = (s.source, s.external_id)
                 prev = found.get(key)
                 if prev is None or along < prev.along_route_mi:
                     found[key] = CorridorCharger(station=s, along_route_mi=along)
+    if attempts and failures == attempts and last_error is not None:
+        raise last_error  # total outage -> fail loud, never fabricate a corridor
     return list(found.values())
-
-
-def pick_charge_stop(
-    chargers: list[CorridorCharger], reachable_distance_mi: float
-) -> CorridorCharger | None:
-    """Best (highest known kW) charger reachable before the truck hits reserve."""
-    usable = [
-        c for c in chargers
-        if c.station.max_power_kw and c.along_route_mi <= reachable_distance_mi
-    ]
-    if not usable:
-        return None
-    return max(usable, key=lambda c: c.station.max_power_kw or 0.0)
 
 
 def truck_to_spec(truck: Truck) -> TruckSpec:
@@ -124,70 +136,75 @@ def truck_to_spec(truck: Truck) -> TruckSpec:
 
 
 @dataclass
+class LoadContext:
+    """Route + corridor chargers for a load, computed ONCE and reused across the
+    whole fleet (both depend only on the load, not the truck). This is the
+    efficiency win that makes fleet ranking cheap: one Mapbox route + one corridor
+    scan per load, not per truck."""
+
+    route: Route
+    corridor: list[CorridorCharger]
+    options: list[ChargeOption]
+    by_ref: dict[str, CorridorCharger]
+
+
+def _ref(c: CorridorCharger) -> str:
+    return f"{c.station.source}:{c.station.external_id}"
+
+
+def build_load_context(
+    load: Load, router: RoutingProvider, charging_providers: list[ChargingProvider]
+) -> LoadContext:
+    origin: Coord = (float(load.origin_lat), float(load.origin_lon))
+    dest: Coord = (float(load.dest_lat), float(load.dest_lon))
+    route = router.route(origin, dest)
+    pts = subsample(cumulative_points(route.geometry), CORRIDOR_MIN_GAP_MI)
+    corridor = find_corridor_chargers(charging_providers, pts, CORRIDOR_BUFFER_MI)
+    by_ref = {_ref(c): c for c in corridor}
+    options = [
+        ChargeOption(ref=_ref(c), along_mi=c.along_route_mi, power_kw=c.station.max_power_kw or 0.0)
+        for c in corridor
+    ]
+    return LoadContext(route=route, corridor=corridor, options=options, by_ref=by_ref)
+
+
+@dataclass
 class FeasibilityResult:
     domain: DomainAssessment
     route: Route
-    charge_stop: CorridorCharger | None
-    corridor: list[CorridorCharger]
+    by_ref: dict[str, CorridorCharger]
 
 
-def evaluate(
-    *,
-    truck: Truck,
-    load: Load,
-    soc_start_pct: float,
-    params: ModelParams,
-    router: RoutingProvider,
-    charging_providers: list[ChargingProvider],
+def assess_truck(
+    *, truck: Truck, load: Load, soc_start_pct: float, params: ModelParams, ctx: LoadContext
 ) -> FeasibilityResult:
-    """Route, find corridor chargers if needed, and run the energy model."""
+    """Run the energy model for one truck against a pre-built load context."""
     spec = truck_to_spec(truck)
-    origin: Coord = (float(load.origin_lat), float(load.origin_lon))
-    dest: Coord = (float(load.dest_lat), float(load.dest_lon))
-
-    route = router.route(origin, dest)
-
-    from app.domain.energy import (
-        consumption_kwh_per_mi,
-        energy_required_kwh,
-        usable_energy_for_trip_kwh,
-    )
-
-    consumption = consumption_kwh_per_mi(spec, float(load.weight_lb), params)
-    energy_req = energy_required_kwh(spec, float(load.weight_lb), route.distance_mi, params)
-    usable = usable_energy_for_trip_kwh(spec, soc_start_pct, params)
-
-    charge_stop: CorridorCharger | None = None
-    corridor: list[CorridorCharger] = []
-
-    if energy_req > usable:
-        pts = subsample(cumulative_points(route.geometry), CORRIDOR_MIN_GAP_MI)
-        corridor = find_corridor_chargers(charging_providers, pts, CORRIDOR_BUFFER_MI)
-        reachable_distance = usable / consumption if consumption > 0 else 0.0
-        charge_stop = pick_charge_stop(corridor, reachable_distance)
-
     domain = assess(
         truck=spec,
         payload_lb=float(load.weight_lb),
-        distance_mi=route.distance_mi,
-        drive_hours=route.duration_hours,
+        distance_mi=ctx.route.distance_mi,
+        drive_hours=ctx.route.duration_hours,
         depart_at=load.pickup_window_start,
         deliver_by=load.delivery_window_end,
         soc_start_pct=soc_start_pct,
         params=params,
-        charger_max_kw=charge_stop.station.max_power_kw if charge_stop else None,
-        charger_reachable=charge_stop is not None,
+        corridor=ctx.options,
     )
-    return FeasibilityResult(domain=domain, route=route, charge_stop=charge_stop, corridor=corridor)
+    return FeasibilityResult(domain=domain, route=ctx.route, by_ref=ctx.by_ref)
 
 
 def _D(x: float, places: str = "0.001") -> Decimal:
     return Decimal(str(x)).quantize(Decimal(places))
 
 
-def _charger_snapshot(c: CorridorCharger, picked: bool) -> dict:
+def _stop_snapshot(c: CorridorCharger, *, order: int, energy_added_kwh: float, charge_hours: float) -> dict:
+    """A charge stop the truck actually makes — the lean, map-ready record. Only
+    the picked stops are stored (not the full corridor of candidates), so each
+    assessment stays small and the map shows exactly the plan."""
     s = c.station
     return {
+        "order": order,
         "source": s.source,
         "external_id": s.external_id,
         "name": s.name,
@@ -198,7 +215,9 @@ def _charger_snapshot(c: CorridorCharger, picked: bool) -> dict:
         "num_dc_fast_ports": s.num_dc_fast_ports,
         "connector_types": s.connector_types,
         "along_route_mi": round(c.along_route_mi, 1),
-        "picked": picked,
+        "energy_added_kwh": round(energy_added_kwh, 1),
+        "charge_minutes": round(charge_hours * 60, 0),
+        "picked": True,
     }
 
 
@@ -213,16 +232,17 @@ def persist_assessment(
 ) -> Assessment:
     """Write a fully reproducible audit record and return it."""
     d = result.domain
-    picked_key = (
-        (result.charge_stop.station.source, result.charge_stop.station.external_id)
-        if result.charge_stop else None
-    )
-    chargers_used = [
-        _charger_snapshot(
-            c, picked=(c.station.source, c.station.external_id) == picked_key
+    chargers_used = []
+    for order, stop in enumerate(d.stops, start=1):
+        c = result.by_ref.get(stop.ref)
+        if c is None:
+            continue
+        chargers_used.append(
+            _stop_snapshot(
+                c, order=order,
+                energy_added_kwh=stop.energy_added_kwh, charge_hours=stop.charge_hours,
+            )
         )
-        for c in result.corridor
-    ]
 
     truck_snapshot = {
         "id": str(truck.id), "make": truck.make, "model": truck.model, "variant": truck.variant,
@@ -263,6 +283,7 @@ def persist_assessment(
         energy_required_kwh=_D(d.energy_required_kwh, "0.001"),
         usable_energy_for_trip_kwh=_D(d.usable_energy_for_trip_kwh, "0.001"),
         charging_required=d.charging_required,
+        num_charge_stops=d.num_charge_stops,
         energy_to_add_kwh=_D(d.energy_to_add_kwh, "0.001"),
         charge_time_hours=_D(d.charge_time_hours, "0.001"),
         charge_cost_usd=d.charge_cost_usd,
@@ -286,11 +307,35 @@ def run_feasibility(
     router: RoutingProvider,
     charging_providers: list[ChargingProvider],
 ) -> tuple[Assessment, FeasibilityResult]:
-    result = evaluate(
-        truck=truck, load=load, soc_start_pct=soc_start_pct, params=params,
-        router=router, charging_providers=charging_providers,
-    )
+    """Single-truck assessment (builds the load context, then assesses one truck)."""
+    ctx = build_load_context(load, router, charging_providers)
+    result = assess_truck(truck=truck, load=load, soc_start_pct=soc_start_pct, params=params, ctx=ctx)
     row = persist_assessment(
         db, truck=truck, load=load, soc_start_pct=soc_start_pct, params=params, result=result
     )
     return row, result
+
+
+def run_fleet(
+    db: Session,
+    *,
+    load: Load,
+    trucks: list[Truck],
+    soc_start_pct: float,
+    params: ModelParams,
+    router: RoutingProvider,
+    charging_providers: list[ChargingProvider],
+) -> list[Assessment]:
+    """Assess every truck for one load against a SHARED route + corridor (one set
+    of API calls), persist each, and return the assessment rows (unordered;
+    ranking is applied at the API layer)."""
+    ctx = build_load_context(load, router, charging_providers)
+    rows: list[Assessment] = []
+    for truck in trucks:
+        result = assess_truck(truck=truck, load=load, soc_start_pct=soc_start_pct, params=params, ctx=ctx)
+        rows.append(
+            persist_assessment(
+                db, truck=truck, load=load, soc_start_pct=soc_start_pct, params=params, result=result
+            )
+        )
+    return rows

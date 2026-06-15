@@ -33,7 +33,7 @@ def session():
 def test_seed_is_idempotent(session):
     a = seed_all(session)
     b = seed_all(session)
-    assert a == (3, 8)  # first run writes everything
+    assert a == (4, 8)  # first run writes everything (4 trucks incl. Tesla Std Range)
     assert b == (0, 0)  # second run writes nothing new
     assert session.scalar(select(Truck).where(Truck.make == "Tesla")) is not None
 

@@ -44,7 +44,7 @@ class NRELStations:
     def __init__(self, api_key: str, client: httpx.Client | None = None,
                  base_url: str = "https://developer.nlr.gov") -> None:
         self._key = api_key
-        self._client = client or httpx.Client(timeout=15.0)
+        self._client = client or httpx.Client(timeout=25.0)
         self._base_url = base_url
 
     def stations_near(self, lat: float, lon: float, radius_mi: float) -> list[StationResult]:
@@ -96,7 +96,7 @@ class OCMStations:
     def __init__(self, api_key: str, client: httpx.Client | None = None,
                  base_url: str = "https://api.openchargemap.io") -> None:
         self._key = api_key
-        self._client = client or httpx.Client(timeout=15.0)
+        self._client = client or httpx.Client(timeout=25.0)
         self._base_url = base_url
 
     def stations_near(self, lat: float, lon: float, radius_mi: float) -> list[StationResult]:

@@ -62,6 +62,15 @@ Running log of non-trivial engineering and modeling decisions: the choice, the r
 - **Why:** no OEM publishes a kWh/mi figure tied to a stated payload. Deriving from published usable-kWh and range is transparent arithmetic, and the Tesla result (1.644) cross-checks cleanly against NACFE's *measured* 1.55–1.72 kWh/mi — corroboration, not coincidence. The payload the rating assumes is genuinely unpublished, so it is flagged `assumption` and surfaced as tunable in the Methodology panel, never shown as fact.
 - **Tradeoff:** the absolute kWh/mi inherits whatever payload the OEM rated at; the model's payload term adjusts from `reference_payload`, so the assumption is visible and movable rather than buried.
 
+### D14. Multi-stop charge planning, fleet ranking, and the charger-power floor (2026-06-14)
+- **Core interaction is now fleet ranking:** for a selected load, every truck is assessed against a **shared route + corridor** (computed once in `build_load_context`, since both depend only on the load, not the truck — one set of Mapbox/charger calls per load) and ranked best-first. New `/api/assess/fleet`; ranking key = (verdict, num_stops, −arrival_margin).
+- **Multi-stop model (replaces single-stop):** greedy range-anxiety planner in `plan_charging` — drive to the **farthest reachable** usable charger, add **just enough to finish** (or fill to the SoC cap and continue), repeat; flag where it would strand. Minimizes stops; not a global optimum (stated). This turned blunt "infeasible (needs >1 stop)" results into real "feasible with N stops" plans with pins on the map.
+  - **Why "just enough to finish, else fill to cap":** preserves the correct single-stop economics (a small top-up stays small) while enabling multi-stop. Pinned by tests.
+- **Charger-power floor (`min_charger_power_kw`, default 150 kW):** live testing exposed the greedy planner selecting operationally absurd low-power chargers (a 3 kW AC plug → 3,300 min; 50 kW destination chargers → 5+ h). No freight operator charges a Class 8 truck at 3 kW. Modeling only genuine DC-fast charging is the honest fix; the threshold is a visible, tunable parameter, **not** a hidden filter. Excluded chargers are dropped from the *plan*, never invented around.
+- **Corridor resilience:** corridor discovery is best-effort per (sample point, provider) — one timeout skips that lookup (partial coverage is already a disclosed simplification, not fabrication), but a *total* outage still fails loudly. The route call remains strictly fail-loud.
+- **Lean audit records:** each assessment stores only the **picked stops** (with order, kWh added, minutes) — not the full ~250-charger corridor — keeping records small and the map showing exactly the plan.
+- **Tesla Semi Standard Range (548 kWh)** added as a 4th real truck — the honest home for the CARB filing's 548 kWh figure (a separate trim), giving the fleet a real range spread.
+
 ### D13. Correctness gate — Tesla usable battery & base-consumption derivation (verified 2026-06-14)
 Two correctness checks before UI work; both traced to source.
 

@@ -47,6 +47,15 @@ def build_methodology(params: ModelParams | None = None) -> MethodologyOut:
             is_estimate=False,
         ),
         ParamDoc(
+            name="min_charger_power_kw", value=p.min_charger_power_kw, unit="kW",
+            description=(
+                "Minimum charger power treated as usable for a Class 8 truck en route. "
+                "Below this, a stop is operationally unrealistic for freight (a 3 kW AC plug "
+                "would take 50+ hours), so such chargers are excluded from the plan. Tunable."
+            ),
+            is_estimate=False,
+        ),
+        ParamDoc(
             name="energy_price_per_kwh_usd", value=float(p.energy_price_per_kwh_usd), unit="$/kWh",
             description="Price used for charge-cost estimates.",
             is_estimate=False,
@@ -86,9 +95,15 @@ def build_methodology(params: ModelParams | None = None) -> MethodologyOut:
         "reference_payload (40,000 lb) is an ASSUMPTION — OEMs don't publish the payload "
         "their range rating assumes. It is tunable and flagged, never presented as fact.",
         "Charging is modeled as constant power to the SoC cap; the high-SoC taper is omitted.",
+        "Multi-stop planning is greedy: drive to the farthest reachable high-power charger, "
+        "add just enough to finish (or fill to the SoC cap and continue). It minimizes stops "
+        "but is not a global cost/time optimum (stated simplification).",
+        "Only chargers at or above min_charger_power_kw are treated as usable for a Class 8 "
+        "truck; slower plugs are excluded rather than modeled as multi-hour stops.",
         "Corridor charger search samples the route geometry and may miss chargers between "
         "sample points (v1 simplification). NREL/NLR does not publish kW, so charge-time "
-        "power comes from Open Charge Map; we never invent a kW value.",
+        "power comes from Open Charge Map; we never invent a kW value. Corridor lookups are "
+        "best-effort: a single provider timeout skips that point, but a total outage fails loudly.",
         "The only synthetic data in the system is the sample load roster (badged 'synthetic').",
     ]
     return MethodologyOut(params=param_docs, sources=sources, notes=notes)

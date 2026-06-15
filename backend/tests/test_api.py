@@ -146,6 +146,18 @@ def test_assess_404_for_unknown_truck(client):
     assert r.status_code == 404
 
 
+def test_assess_fleet_returns_ranked_items(client):
+    c, ids = client
+    r = c.post("/api/assess/fleet", json={"load_id": str(ids["load"]), "soc_start_pct": 100.0})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["load_id"] == str(ids["load"])
+    assert len(body["items"]) >= 1
+    item = body["items"][0]
+    assert "verdict" in item and "num_charge_stops" in item
+    assert item["arrival_margin_min"] is not None
+
+
 def test_get_assessment_roundtrip(client):
     c, ids = client
     created = c.post("/api/assess", json={

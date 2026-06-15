@@ -52,12 +52,21 @@ class AssessParams(BaseModel):
     payload_coefficient_kwh_per_mi_per_ton: float | None = None
     charge_efficiency: float | None = None
     charge_soc_cap_pct: float | None = None
+    min_charger_power_kw: float | None = None
     energy_price_per_kwh_usd: float | None = None
 
 
 class AssessRequest(BaseModel):
     load_id: uuid.UUID
     truck_id: uuid.UUID
+    soc_start_pct: float = Field(ge=0, le=100)
+    params: AssessParams | None = None
+
+
+class FleetRequest(BaseModel):
+    """Assess the whole fleet for one load, at one (fleet-wide) starting SoC."""
+
+    load_id: uuid.UUID
     soc_start_pct: float = Field(ge=0, le=100)
     params: AssessParams | None = None
 
@@ -72,9 +81,13 @@ class AssessmentOut(BaseModel):
     energy_required_kwh: float
     usable_energy_for_trip_kwh: float
     charging_required: bool
+    num_charge_stops: int
     energy_to_add_kwh: float
     charge_time_hours: float
     charge_cost_usd: float
+    # Set by the API: minutes of slack before the delivery window closes
+    # (negative = late). The "deciding number" for the fleet ranking.
+    arrival_margin_min: float | None = None
     # time
     route_distance_mi: float
     route_drive_hours: float
@@ -96,6 +109,13 @@ class AssessmentOut(BaseModel):
     truck_snapshot: dict
     load_snapshot: dict
     created_at: datetime
+
+
+class FleetResponse(BaseModel):
+    """Trucks assessed for one load, ranked best option first."""
+
+    load_id: uuid.UUID
+    items: list[AssessmentOut]
 
 
 class ParamDoc(BaseModel):

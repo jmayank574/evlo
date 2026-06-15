@@ -19,12 +19,30 @@ from app.schemas import (
     AssessParams,
     AssessRequest,
     AssessmentOut,
+    FleetRequest,
+    FleetResponse,
     LoadOut,
     MethodologyOut,
     TruckOut,
 )
-from app.services.feasibility import run_feasibility
+from app.services.feasibility import run_feasibility, run_fleet
 from app.services.methodology import build_methodology
+
+_VERDICT_RANK = {"feasible": 0, "feasible_with_charging": 1, "infeasible": 2}
+
+
+def _to_out(row: Assessment, load: Load) -> AssessmentOut:
+    out = AssessmentOut.model_validate(row)
+    margin = (load.delivery_window_end - row.projected_arrival).total_seconds() / 60.0
+    out.arrival_margin_min = round(margin, 1)
+    return out
+
+
+def _rank_key(out: AssessmentOut) -> tuple:
+    # Best first: feasible < charging < infeasible; then fewer stops; then more
+    # arrival slack (larger margin first).
+    margin = out.arrival_margin_min if out.arrival_margin_min is not None else -1e9
+    return (_VERDICT_RANK.get(out.verdict, 99), out.num_charge_stops, -margin)
 
 router = APIRouter(prefix="/api")
 
@@ -39,7 +57,7 @@ def build_params(ap: AssessParams | None) -> ModelParams:
         return base
     overrides: dict = {}
     for f in ("reserve_pct", "dwell_buffer_min", "payload_coefficient_kwh_per_mi_per_ton",
-              "charge_efficiency", "charge_soc_cap_pct"):
+              "charge_efficiency", "charge_soc_cap_pct", "min_charger_power_kw"):
         v = getattr(ap, f)
         if v is not None:
             overrides[f] = v
@@ -75,11 +93,16 @@ def methodology() -> MethodologyOut:
 
 
 @router.get("/assessments/{assessment_id}", response_model=AssessmentOut)
-def get_assessment(assessment_id: uuid.UUID, db: Session = Depends(get_db)) -> Assessment:
+def get_assessment(assessment_id: uuid.UUID, db: Session = Depends(get_db)) -> AssessmentOut:
     row = db.get(Assessment, assessment_id)
     if row is None:
         raise HTTPException(status_code=404, detail="Assessment not found")
-    return row
+    out = AssessmentOut.model_validate(row)
+    if row.load is not None:
+        out.arrival_margin_min = round(
+            (row.load.delivery_window_end - row.projected_arrival).total_seconds() / 60.0, 1
+        )
+    return out
 
 
 @router.post("/assess", response_model=AssessmentOut)
@@ -87,7 +110,7 @@ def assess_load(
     req: AssessRequest,
     db: Session = Depends(get_db),
     providers: Providers = Depends(provider_dep),
-) -> Assessment:
+) -> AssessmentOut:
     truck = db.get(Truck, req.truck_id)
     if truck is None:
         raise HTTPException(status_code=404, detail="Truck not found")
@@ -104,4 +127,32 @@ def assess_load(
     except ProviderError as exc:
         # Fail loudly — never fabricate routing/charger data to fill a gap.
         raise HTTPException(status_code=502, detail=f"Upstream data provider failed: {exc}") from exc
-    return row
+    return _to_out(row, load)
+
+
+@router.post("/assess/fleet", response_model=FleetResponse)
+def assess_fleet(
+    req: FleetRequest,
+    db: Session = Depends(get_db),
+    providers: Providers = Depends(provider_dep),
+) -> FleetResponse:
+    """Assess every truck for one load (shared route + corridor) and rank them
+    best-option-first. This is the core decision view."""
+    load = db.get(Load, req.load_id)
+    if load is None:
+        raise HTTPException(status_code=404, detail="Load not found")
+    trucks = list(db.scalars(select(Truck).order_by(Truck.make)).all())
+    if not trucks:
+        raise HTTPException(status_code=404, detail="No trucks in fleet")
+
+    params = build_params(req.params)
+    try:
+        rows = run_fleet(
+            db, load=load, trucks=trucks, soc_start_pct=req.soc_start_pct,
+            params=params, router=providers.router, charging_providers=providers.charging,
+        )
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=f"Upstream data provider failed: {exc}") from exc
+
+    items = sorted((_to_out(r, load) for r in rows), key=_rank_key)
+    return FleetResponse(load_id=load.id, items=items)

@@ -206,6 +206,7 @@ class Assessment(Base):
     energy_required_kwh: Mapped[Decimal] = mapped_column(Numeric(9, 3))
     usable_energy_for_trip_kwh: Mapped[Decimal] = mapped_column(Numeric(9, 3))
     charging_required: Mapped[bool] = mapped_column(Boolean)
+    num_charge_stops: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     energy_to_add_kwh: Mapped[Decimal] = mapped_column(Numeric(9, 3))
     charge_time_hours: Mapped[Decimal] = mapped_column(Numeric(6, 3))
     charge_cost_usd: Mapped[Decimal] = mapped_column(Numeric(10, 2))

@@ -116,6 +116,26 @@ TRUCKS: list[dict] = [
             "reference_payload_lb": _prov("assumption", TESLA_SPEC_URL, REFERENCE_PAYLOAD_NOTE),
         },
     ),
+    dict(
+        make="Tesla",
+        model="Semi",
+        variant="Standard Range (548 kWh)",
+        usable_kwh=Decimal("548.00"),
+        published_range_mi=325,
+        gvwr_lb=82_000,
+        max_charge_kw=Decimal("1200.00"),
+        base_consumption_kwh_per_mi=Decimal("1.686"),  # 548 / 325
+        reference_payload_lb=40_000,
+        spec_source_url=TESLA_CARB_URL,
+        provenance={
+            "usable_kwh": _prov("regulatory", TESLA_CARB_URL, "548 kWh Standard Range trim per May 2026 CARB filing"),
+            "published_range_mi": _prov("secondary", TESLA_CARB_URL, "~325 mi per reporting of the CARB filing (approximate; not a manufacturer spec sheet)"),
+            "gvwr_lb": _prov("regulatory", TESLA_CARB_URL),
+            "max_charge_kw": _prov("manufacturer", TESLA_SPEC_URL, "up to 1.2 MW Megacharger (shared Semi platform)"),
+            "base_consumption_kwh_per_mi": _prov("derived", TESLA_CARB_URL, "derived as usable_kwh / published_range (548/325 = 1.686)"),
+            "reference_payload_lb": _prov("assumption", TESLA_CARB_URL, REFERENCE_PAYLOAD_NOTE),
+        },
+    ),
 ]
 
 

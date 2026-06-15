@@ -29,7 +29,7 @@ class MapboxRouter:
         base_url: str = "https://api.mapbox.com",
     ) -> None:
         self._token = token
-        self._client = client or httpx.Client(timeout=15.0)
+        self._client = client or httpx.Client(timeout=25.0)
         self._base_url = base_url
 
     def route(self, origin: Coord, dest: Coord) -> Route:
