@@ -65,7 +65,8 @@ export function deciding(a: Assessment): { value: string; label: string } {
   }
 
   if (arriveBy) {
-    return { value: `Roll ${fmtClock(a.latest_departure, tz)}`, label: `${fmtDur(a.departure_slack_min ?? 0)} slack` };
+    // Just the actionable answer — no "slack" jargon in the glance view.
+    return { value: `Roll by ${fmtClock(a.latest_departure, tz)}`, label: "latest departure" };
   }
   // depart-at
   if (a.verdict === "feasible_with_charging") {

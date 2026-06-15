@@ -309,7 +309,7 @@ def test_arrive_by_computes_latest_departure_and_is_feasible():
     assert a.time_mode == ARRIVE_BY
     assert a.latest_departure == datetime(2026, 6, 14, 9, 30, tzinfo=timezone.utc)
     assert a.on_time is True
-    assert "slack" in a.reasons[-1]
+    assert "departure window" in a.reasons[-1]
     # reasons must NOT bake absolute clock times (rendered by the frontend in local tz)
     assert "AM" not in a.reasons[-1] and "PM" not in a.reasons[-1]
 
@@ -357,7 +357,7 @@ def test_arrive_by_infeasible_when_latest_departure_in_past():
     )
     assert a.verdict == Verdict.INFEASIBLE
     assert a.on_time is False
-    assert "min ago" in a.reasons[-1]
+    assert "ago" in a.reasons[-1]
 
 
 def test_arrive_by_infeasible_when_latest_departure_before_pickup_opens():

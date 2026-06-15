@@ -301,6 +301,13 @@ def _mins(delta) -> float:
     return delta.total_seconds() / 60.0
 
 
+def _dur(minutes: float) -> str:
+    """Friendly duration: '6h 48m' / '45m'. Timezone-independent."""
+    m = int(round(abs(minutes)))
+    h, r = divmod(m, 60)
+    return f"{h}h {r}m" if h else f"{r}m"
+
+
 def assess(
     *,
     truck: TruckSpec,
@@ -367,22 +374,20 @@ def assess(
         projected_arrival = deliver_by  # rolling at the latest -> arrive exactly on the deadline
         time_ok = latest_departure >= earliest_roll
         if time_ok:
-            slack = _mins(latest_departure - earliest_roll)
+            window = _mins(latest_departure - earliest_roll)
             time_reason = (
-                f"On time: the latest safe departure leaves {slack:.0f} min of slack "
-                f"before the deadline."
+                f"On time: the truck can leave any time up to the latest safe departure "
+                f"— a {_dur(window)} departure window."
             )
         elif pw is not None and pw > now_reference:
             short = _mins(pw - latest_departure)
             time_reason = (
-                f"Infeasible on time: would need to roll {short:.0f} min before the load "
+                f"Infeasible on time: would need to roll {_dur(short)} before the load "
                 f"opens for pickup."
             )
         else:
             late = _mins(now_reference - latest_departure)
-            time_reason = (
-                f"Infeasible on time: the latest safe departure was {late:.0f} min ago."
-            )
+            time_reason = f"Infeasible on time: the latest safe departure was {_dur(late)} ago."
     else:  # DEPART_AT
         if depart_at is None:
             raise ValueError("depart_at is required in depart-at mode")
@@ -390,10 +395,10 @@ def assess(
         time_ok = _aware(projected_arrival) <= _aware(deliver_by)
         if time_ok:
             margin = _mins(_aware(deliver_by) - _aware(projected_arrival))
-            time_reason = f"On time: arrives with {margin:.0f} min to spare before the deadline."
+            time_reason = f"On time: arrives with {_dur(margin)} to spare before the deadline."
         else:
             over = _mins(_aware(projected_arrival) - _aware(deliver_by))
-            time_reason = f"Infeasible on time: arrives {over:.0f} min past the deadline."
+            time_reason = f"Infeasible on time: arrives {_dur(over)} past the deadline."
 
     charging_required = num_stops > 0 or not plan.can_reach
     reasons: list[str] = []
