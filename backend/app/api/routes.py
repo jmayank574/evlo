@@ -86,8 +86,9 @@ def build_params(ap: AssessParams | None) -> ModelParams:
     return dataclasses.replace(base, **overrides)
 
 
-@router.get("/health")
+@router.api_route("/health", methods=["GET", "HEAD"])
 def health() -> dict:
+    # HEAD included so uptime monitors (which default to HEAD) don't get a 405.
     return {"status": "ok"}
 
 
