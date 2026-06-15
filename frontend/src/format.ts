@@ -17,17 +17,54 @@ export function fmtDur(min: number): string {
   return `${r}m`;
 }
 
-/** A route's local timezone. Times are a fact about the destination, not the
- * viewer — a CA load's deadline is Pacific wherever you're sitting. Derived from
- * the load's state suffix (all sample loads are single-state CA or TX);
- * per-route IANA resolution from coordinates is the documented follow-up. */
+/** The whole app is pinned to Pacific for now, labeled "PT" everywhere. Times
+ * are a fact about the route, not the viewer. Per-route timezone resolution
+ * (e.g. Central for the TX lanes) is a deliberate future follow-up — see
+ * DECISIONS D19. There is intentionally no UTC display path. */
+const PACIFIC = "America/Los_Angeles";
 export interface Tz {
   zone: string;
   abbr: string;
 }
-export function routeTz(label?: string): Tz {
-  if (label && /\bTX\b/.test(label)) return { zone: "America/Chicago", abbr: "CT" };
-  return { zone: "America/Los_Angeles", abbr: "PT" }; // default Pacific
+export function routeTz(_label?: string): Tz {
+  return { zone: PACIFIC, abbr: "PT" };
+}
+
+function _parts(d: Date, zone: string): Record<string, string> {
+  const dtf = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone, hour12: false,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+  });
+  return dtf.formatToParts(d).reduce<Record<string, string>>((a, x) => {
+    a[x.type] = x.value;
+    return a;
+  }, {});
+}
+
+/** Minutes the zone is ahead of UTC at `instant` (negative west of UTC). */
+function _zoneOffsetMin(instant: Date, zone: string): number {
+  const p = _parts(instant, zone);
+  const hh = p.hour === "24" ? 0 : +p.hour;
+  const asUtc = Date.UTC(+p.year, +p.month - 1, +p.day, hh, +p.minute, +p.second);
+  return (asUtc - instant.getTime()) / 60000;
+}
+
+/** UTC ISO -> Pacific wall-clock "YYYY-MM-DDTHH:MM" for a datetime-local input. */
+export function toPacificInput(iso: string): string {
+  const p = _parts(new Date(iso), PACIFIC);
+  const hh = p.hour === "24" ? "00" : p.hour;
+  return `${p.year}-${p.month}-${p.day}T${hh}:${p.minute}`;
+}
+
+/** Pacific wall-clock "YYYY-MM-DDTHH:MM" (what the user typed) -> UTC ISO instant. */
+export function pacificInputToUtcIso(wallclock: string): string {
+  const [datePart, timePart] = wallclock.split("T");
+  const [y, mo, d] = datePart.split("-").map(Number);
+  const [h, mi] = timePart.split(":").map(Number);
+  const guess = Date.UTC(y, mo - 1, d, h, mi);
+  const offset = _zoneOffsetMin(new Date(guess), PACIFIC);
+  return new Date(guess - offset * 60000).toISOString();
 }
 
 /** "Jun 16, 1:00 PM PT" — always in the route tz, always labeled. */

@@ -11,6 +11,7 @@ import pytest
 
 from app.domain.energy import (
     ARRIVE_BY,
+    DEPART_AT,
     Assessment,
     ChargeOption,
     ModelParams,
@@ -370,6 +371,22 @@ def test_arrive_by_infeasible_when_latest_departure_before_pickup_opens():
     )
     assert a.verdict == Verdict.INFEASIBLE
     assert "opens for pickup" in a.reasons[-1]
+
+
+def test_depart_at_arrival_equals_departure_plus_trip():
+    """The entered departure must drive the arrival: arrival = departure + drive
+    + total charge + dwell. Pins the depart-at math (the value the user typed
+    flows straight through)."""
+    depart = datetime(2026, 6, 16, 13, 0, tzinfo=timezone.utc)  # 6:00 AM PT
+    a = assess(
+        truck=TRUCK, payload_lb=44_000.0, distance_mi=200.0, drive_hours=4.0,
+        deliver_by=datetime(2026, 6, 17, 0, 0, tzinfo=timezone.utc),
+        soc_start_pct=30.0, params=PARAMS, time_mode=DEPART_AT, depart_at=depart,
+        corridor=[ChargeOption("c1", 50.0, 350.0)],  # forces a charge stop
+    )
+    assert a.num_charge_stops == 1
+    assert a.total_hours == pytest.approx(a.drive_hours + a.charge_time_hours + a.dwell_hours)
+    assert a.projected_arrival == depart + timedelta(hours=a.total_hours)
 
 
 def test_engine_computes_on_usable_not_nameplate():

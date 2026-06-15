@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "./api";
+import { pacificInputToUtcIso, toPacificInput } from "./format";
 import type { Assessment, AssessParams, Load, Methodology, TimeMode } from "./types";
 import { Controls } from "./components/Controls";
 import { FleetList } from "./components/FleetList";
@@ -32,7 +33,7 @@ export default function App() {
         setMethodology(m);
         if (l.length) {
           setLoadId(l[0].id);
-          setDepartAt(l[0].pickup_window_start.slice(0, 16));
+          setDepartAt(toPacificInput(l[0].pickup_window_start)); // PT wall-clock
         }
       } catch (e) {
         setError(`Could not reach the backend. ${(e as Error).message}`);
@@ -54,7 +55,8 @@ export default function App() {
         soc_start_pct: soc,
         params: Object.keys(ov).length ? ov : undefined,
         time_mode: mode,
-        depart_at: mode === "depart_at" ? depart : undefined,
+        // The input is Pacific wall-clock; send a real UTC instant to the backend.
+        depart_at: mode === "depart_at" ? pacificInputToUtcIso(depart) : undefined,
       });
       setItems(res.items);
       setSelectedId(res.items[0]?.id ?? null);
@@ -95,7 +97,7 @@ export default function App() {
     setItems([]);
     setSelectedId(null);
     const l = loads.find((x) => x.id === id);
-    if (l) setDepartAt(l.pickup_window_start.slice(0, 16));
+    if (l) setDepartAt(toPacificInput(l.pickup_window_start)); // PT wall-clock
   }
 
   const selected = items.find((a) => a.id === selectedId) ?? null;

@@ -79,7 +79,7 @@ export function Controls({
               value={departAt}
               onChange={(e) => onDepartAt(e.target.value)}
             />
-            <div className="hint">Departure time (UTC). Computes projected arrival.</div>
+            <div className="hint">Departure time (PT). Computes projected arrival.</div>
           </div>
         )}
       </div>
