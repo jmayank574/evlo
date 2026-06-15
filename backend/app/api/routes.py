@@ -45,12 +45,12 @@ def _to_out(row: Assessment, load: Load, now: datetime) -> AssessmentOut:
     out.arrival_margin_min = round(
         (_aware(w.delivery_end) - _aware(row.projected_arrival)).total_seconds() / 60.0, 1
     )
-    # Arrive-by deciding number: slack before the latest safe departure, relative
-    # to the earliest the truck can roll (max of now and pickup-window open).
+    # Arrive-by deciding number: the dispatcher's runway = latest safe departure
+    # minus NOW (anchored to real current time, not the pickup window — D20).
+    # Negative once the latest departure has passed (time-infeasible).
     ref = _aware(row.now_reference) if row.now_reference else now
-    earliest = max(ref, _aware(w.pickup_start))
     out.departure_slack_min = round(
-        (_aware(row.latest_departure) - earliest).total_seconds() / 60.0, 1
+        (_aware(row.latest_departure) - ref).total_seconds() / 60.0, 1
     )
     return out
 

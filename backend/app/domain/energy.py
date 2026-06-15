@@ -277,6 +277,9 @@ class Assessment:
     latest_departure: datetime
     projected_arrival: datetime
     now_reference: datetime | None
+    # Arrive-by: minutes from NOW until the latest safe departure (the dispatcher's
+    # runway). Negative once the latest departure has passed. None in depart-at.
+    departure_window_min: float | None
     on_time: bool
 
 
@@ -361,6 +364,7 @@ def assess(
     # --- Time facts (mode-aware), both off the same trip_duration ---
     latest_departure = _aware(deliver_by) - trip
     now_reference: datetime | None = None
+    departure_window_min: float | None = None
     time_ok = True
     time_reason = ""
 
@@ -372,12 +376,15 @@ def assess(
         pw = _aware(pickup_window_start) if pickup_window_start else None
         earliest_roll = max(now_reference, pw) if pw else now_reference
         projected_arrival = deliver_by  # rolling at the latest -> arrive exactly on the deadline
+        # The dispatcher's runway: time from NOW until the latest safe departure
+        # (anchored to real now, not the pickup window — see DECISIONS D20).
+        departure_window_min = _mins(latest_departure - now_reference)
+        # Feasibility still respects the pickup window (can't roll before the load
+        # is available, nor into the past).
         time_ok = latest_departure >= earliest_roll
         if time_ok:
-            window = _mins(latest_departure - earliest_roll)
             time_reason = (
-                f"On time: the truck can leave any time up to the latest safe departure "
-                f"— a {_dur(window)} departure window."
+                f"On time: {_dur(departure_window_min)} from now until the latest safe departure."
             )
         elif pw is not None and pw > now_reference:
             short = _mins(pw - latest_departure)
@@ -456,5 +463,6 @@ def assess(
         latest_departure=latest_departure,
         projected_arrival=projected_arrival,
         now_reference=now_reference,
+        departure_window_min=departure_window_min,
         on_time=on_time,
     )

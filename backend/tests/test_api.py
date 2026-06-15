@@ -57,10 +57,12 @@ def client():
         load = Load(
             reference="LD-T", origin_label="A", origin_lat=Decimal("35.0"), origin_lon=Decimal("-119.0"),
             dest_label="B", dest_lat=Decimal("35.0"), dest_lon=Decimal("-118.0"), weight_lb=40000,
+            # Far-future deadline so arrive-by feasibility never depends on the
+            # real wall clock (these are absolute, not relative, sample dates).
             pickup_window_start=datetime(2026, 6, 15, 6, tzinfo=timezone.utc),
             pickup_window_end=datetime(2026, 6, 15, 8, tzinfo=timezone.utc),
-            delivery_window_start=datetime(2026, 6, 15, 12, tzinfo=timezone.utc),
-            delivery_window_end=datetime(2026, 6, 16, 0, tzinfo=timezone.utc),
+            delivery_window_start=datetime(2099, 1, 1, 0, tzinfo=timezone.utc),
+            delivery_window_end=datetime(2099, 1, 1, 12, tzinfo=timezone.utc),
             data_source="synthetic",
         )
         s.add_all([truck, load])

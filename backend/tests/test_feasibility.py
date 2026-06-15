@@ -83,6 +83,10 @@ def _load(weight_lb=40000, **over):
     return Load(**base)
 
 
+# Fixed "now" so arrive-by feasibility isn't sensitive to the real wall clock.
+NOW = datetime(2026, 6, 15, 6, 0, tzinfo=timezone.utc)
+
+
 def _ctx(router, stations):
     return build_load_context(_load(), router, [FakeCharging(stations)])
 
@@ -109,7 +113,7 @@ def test_find_corridor_dedupes_and_tags_min_along():
 
 def test_assess_truck_feasible_no_charging():
     ctx = _ctx(FakeRouter(100.0, 2.0, GEOMETRY), [])
-    res = assess_truck(truck=_truck(), load=_load(), soc_start_pct=100.0, params=ModelParams(), ctx=ctx)
+    res = assess_truck(truck=_truck(), load=_load(), soc_start_pct=100.0, params=ModelParams(), ctx=ctx, now=NOW)
     assert res.domain.verdict == Verdict.FEASIBLE
     assert res.domain.num_charge_stops == 0
 
@@ -119,7 +123,7 @@ def test_assess_truck_feasible_with_charging_picks_reachable():
     c2 = StationResult("OCM", "C2", 35.0, -116.526, network="EA", name="Stop C", max_power_kw=1000)
     ctx = _ctx(FakeRouter(200.0, 4.0, GEOMETRY), [c1, c2])
     # soc 55 -> usable 200 -> reachable 100 mi: C1(~70) reachable, finishes in 1 stop.
-    res = assess_truck(truck=_truck(), load=_load(), soc_start_pct=55.0, params=ModelParams(), ctx=ctx)
+    res = assess_truck(truck=_truck(), load=_load(), soc_start_pct=55.0, params=ModelParams(), ctx=ctx, now=NOW)
     assert res.domain.verdict == Verdict.FEASIBLE_WITH_CHARGING
     assert res.domain.num_charge_stops == 1
     assert res.domain.stops[0].ref == "OCM:C1"
@@ -127,7 +131,7 @@ def test_assess_truck_feasible_with_charging_picks_reachable():
 
 def test_assess_truck_infeasible_when_no_charger():
     ctx = _ctx(FakeRouter(200.0, 4.0, GEOMETRY), [])  # no chargers
-    res = assess_truck(truck=_truck(), load=_load(), soc_start_pct=55.0, params=ModelParams(), ctx=ctx)
+    res = assess_truck(truck=_truck(), load=_load(), soc_start_pct=55.0, params=ModelParams(), ctx=ctx, now=NOW)
     assert res.domain.verdict == Verdict.INFEASIBLE
     assert res.domain.num_charge_stops == 0
 
@@ -149,7 +153,7 @@ def test_run_feasibility_persists_reproducible_record(session):
     c1 = StationResult("OCM", "C1", 35.0, -117.763, name="Stop B", max_power_kw=350)
     row, _ = run_feasibility(
         session, truck=truck, load=load, soc_start_pct=55.0, params=ModelParams(),
-        router=FakeRouter(200.0, 4.0, GEOMETRY), charging_providers=[FakeCharging([c1])],
+        router=FakeRouter(200.0, 4.0, GEOMETRY), charging_providers=[FakeCharging([c1])], now=NOW,
     )
     persisted = session.scalar(select(Assessment).where(Assessment.id == row.id))
     assert persisted.verdict == "feasible_with_charging"
@@ -173,7 +177,7 @@ def test_run_fleet_assesses_every_truck_once(session):
     c1 = StationResult("OCM", "C1", 35.0, -117.763, name="Stop B", max_power_kw=350)
     rows = run_fleet(
         session, load=load, trucks=[big, small], soc_start_pct=80.0, params=ModelParams(),
-        router=FakeRouter(200.0, 4.0, GEOMETRY), charging_providers=[FakeCharging([c1])],
+        router=FakeRouter(200.0, 4.0, GEOMETRY), charging_providers=[FakeCharging([c1])], now=NOW,
     )
     assert len(rows) == 2
     by_truck = {r.truck_id: r for r in rows}
